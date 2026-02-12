@@ -1,7 +1,13 @@
 #pragma once
 
+#include <memory>
+#include <vector>
+
 #include <d3d12.h>
 #include <wrl/client.h>
+
+#include "GameEntity.h"
+#include "Camera.h"
 
 class Game
 {
@@ -37,5 +43,9 @@ private:
 	// Other graphics data
 	D3D12_VIEWPORT viewport{};
 	D3D12_RECT scissorRect{};
+
+	// Game Vars
+	std::shared_ptr<FPSCamera> camera;
+	std::vector<std::shared_ptr<GameEntity>> entities;
 };
 

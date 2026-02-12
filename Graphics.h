@@ -1,9 +1,10 @@
 #pragma once
 
+#include <string>
+
 #include <Windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
-#include <string>
 #include <wrl/client.h>
 
 #pragma comment (lib, "d3d12.lib")
@@ -13,7 +14,7 @@ namespace Graphics
 {
 	// --- CONSTANTS ---
 	const unsigned int NumBackBuffers = 2;
-
+	const unsigned int maxConstantBuffers = 1000;
 
 	// --- GLOBAL VARS ---
 
@@ -25,6 +26,10 @@ namespace Graphics
 	inline Microsoft::WRL::ComPtr<ID3D12CommandAllocator> CommandAllocator;
 	inline Microsoft::WRL::ComPtr<ID3D12CommandQueue> CommandQueue;
 	inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> CommandList;
+
+	// constant buffers
+	inline Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> CBSRVDescriptorHeap;
+	inline Microsoft::WRL::ComPtr<ID3D12Resource> CBUploadHeap;
 
 	// Rendering buffers & descriptors
 	inline Microsoft::WRL::ComPtr<ID3D12Resource> BackBuffers[NumBackBuffers];
@@ -61,6 +66,10 @@ namespace Graphics
 	// Resource Creation
 	Microsoft::WRL::ComPtr<ID3D12Resource> CreateStaticBuffer(
 		size_t stride, size_t count, void* data
+	);
+
+	D3D12_GPU_DESCRIPTOR_HANDLE FillNextConstantBufferAndGetGPUDescriptorHandle(
+		void* data, unsigned int dataSizeInBytes
 	);
 
 	// Command List & synchronization
