@@ -17,12 +17,21 @@
 // For the DirectX Math library
 using namespace DirectX;
 
+// random range helper macro
+#define RandomRange(min, max) (float)rand() / RAND_MAX * (max - min) + min
+
 // --------------------------------------------------------
 // The constructor is called after the window and graphics API
 // are initialized but before the game loop begins
 // --------------------------------------------------------
 Game::Game()
 {
+	// seed random
+	srand((unsigned int)time(0));
+
+	numLights = 22;
+	GenerateLights();
+
 	CreateRootSigAndPipelineState();
 	CreateGeometry();
 
@@ -105,28 +114,58 @@ void Game::CreateRootSigAndPipelineState()
 
 	// Root signature
 	{
-		// define cbv table
-		D3D12_DESCRIPTOR_RANGE cbvTable = {};
-		cbvTable.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
-		cbvTable.NumDescriptors = 1;
-		cbvTable.BaseShaderRegister = 0;
-		cbvTable.RegisterSpace = 0;
-		cbvTable.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+		// define VS cbv table
+		D3D12_DESCRIPTOR_RANGE cbvRangeVS = {};
+		cbvRangeVS.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
+		cbvRangeVS.NumDescriptors = 1;
+		cbvRangeVS.BaseShaderRegister = 0;
+		cbvRangeVS.RegisterSpace = 0;
+		cbvRangeVS.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+		// define PS cbv table
+		D3D12_DESCRIPTOR_RANGE cbvRangePS = {};
+		cbvRangePS.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
+		cbvRangePS.NumDescriptors = 1;
+		cbvRangePS.BaseShaderRegister = 0;
+		cbvRangePS.RegisterSpace = 0;
+		cbvRangePS.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
 		// parameter
-		D3D12_ROOT_PARAMETER rootParam = {};
-		rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-		rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-		rootParam.DescriptorTable.NumDescriptorRanges = 1;
-		rootParam.DescriptorTable.pDescriptorRanges = &cbvTable;
+		D3D12_ROOT_PARAMETER rootParams[2];
+
+		// vertex shader CBV table
+		rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+		rootParams[0].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[0].DescriptorTable.pDescriptorRanges = &cbvRangeVS;
+
+		// pixel shader CBV table
+		rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+		rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[1].DescriptorTable.pDescriptorRanges = &cbvRangePS;
+
+		// Create a single static sampler (available to all pixel shaders)
+		D3D12_STATIC_SAMPLER_DESC anisoWrap = {};
+		anisoWrap.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		anisoWrap.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		anisoWrap.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		anisoWrap.Filter = D3D12_FILTER_ANISOTROPIC;
+		anisoWrap.MaxAnisotropy = 16;
+		anisoWrap.MaxLOD = D3D12_FLOAT32_MAX;
+		anisoWrap.ShaderRegister = 0;  // Means register(s0) in the shader
+		anisoWrap.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+		D3D12_STATIC_SAMPLER_DESC samplers[] = { anisoWrap };
 
 		// describe & serialize root sig
 		D3D12_ROOT_SIGNATURE_DESC rootSig = {};
-		rootSig.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-		rootSig.NumParameters = 1;
-		rootSig.pParameters = &rootParam;
-		rootSig.NumStaticSamplers = 0;
-		rootSig.pStaticSamplers = 0;
+		rootSig.Flags = 
+			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
+			D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
+		rootSig.NumParameters = ARRAYSIZE(rootParams);
+		rootSig.pParameters = rootParams;
+		rootSig.NumStaticSamplers = ARRAYSIZE(samplers);
+		rootSig.pStaticSamplers = samplers;
 
 		ID3DBlob* serlializedRootSig = 0;
 		ID3DBlob* errors = 0;
@@ -143,7 +182,7 @@ void Game::CreateRootSigAndPipelineState()
 			OutputDebugString((wchar_t*)errors->GetBufferPointer());
 
 		// actually create root sig
-		Graphics::Device->CreateRootSignature(
+		HRESULT hr = Graphics::Device->CreateRootSignature(
 			0,
 			serlializedRootSig->GetBufferPointer(),
 			serlializedRootSig->GetBufferSize(),
@@ -196,7 +235,7 @@ void Game::CreateRootSigAndPipelineState()
 		psoDesc.SampleMask = 0xffffff;
 
 		// create piplines state object
-		Graphics::Device->CreateGraphicsPipelineState(
+		HRESULT hr = Graphics::Device->CreateGraphicsPipelineState(
 			&psoDesc,
 			IID_PPV_ARGS(pipelineState.GetAddressOf())
 		);
@@ -230,8 +269,48 @@ void Game::CreateRootSigAndPipelineState()
 // --------------------------------------------------------
 void Game::CreateGeometry()
 {
+	// load textures
+	std::wstring texturePath = L"../../Assets/Textures/";
+	unsigned int paintAlbedo = Graphics::LoadTexture(FixPath(texturePath + L"PBR/paint_albedo.png").c_str());
+	unsigned int paintNormals = Graphics::LoadTexture(FixPath(texturePath + L"PBR/paint_normals.png").c_str());
+	unsigned int paintRoughness = Graphics::LoadTexture(FixPath(texturePath + L"PBR/paint_roughness.png").c_str());
+	unsigned int paintMetal = Graphics::LoadTexture(FixPath(texturePath + L"PBR/paint_metal.png").c_str());
+
+	unsigned int bronzeAlbedo = Graphics::LoadTexture(FixPath(texturePath + L"PBR/bronze_albedo.png").c_str());
+	unsigned int bronzeNormals = Graphics::LoadTexture(FixPath(texturePath + L"PBR/bronze_normals.png").c_str());
+	unsigned int bronzeRoughness = Graphics::LoadTexture(FixPath(texturePath + L"PBR/bronze_roughness.png").c_str());
+	unsigned int bronzeMetal = Graphics::LoadTexture(FixPath(texturePath + L"PBR/bronze_metal.png").c_str());
+
+	unsigned int snowAlbedo = Graphics::LoadTexture(FixPath(texturePath + L"PBR/snow_albedo.png").c_str());
+	unsigned int snowNormals = Graphics::LoadTexture(FixPath(texturePath + L"PBR/snow_normals.png").c_str());
+	unsigned int snowRoughness = Graphics::LoadTexture(FixPath(texturePath + L"PBR/snow_roughness.png").c_str());
+	unsigned int snowMetal = Graphics::LoadTexture(FixPath(texturePath + L"PBR/snow_metal.png").c_str());
+
+	unsigned int crateAlbedo = Graphics::LoadTexture(FixPath(texturePath + L"PBR/crate_wood_albedo.png").c_str());
+	unsigned int crateNormals = Graphics::LoadTexture(FixPath(texturePath + L"PBR/crate_wood_normals.png").c_str());
+	unsigned int crateRoughness = Graphics::LoadTexture(FixPath(texturePath + L"PBR/crate_wood_roughness.png").c_str());
+	unsigned int crateMetal = Graphics::LoadTexture(FixPath(texturePath + L"PBR/crate_wood_metal.png").c_str());
+
+	unsigned int mandoAlbedo = Graphics::LoadTexture(FixPath(texturePath + L"mando.png").c_str());
+	unsigned int mandoNormals = Graphics::LoadTexture(FixPath(texturePath + L"mando_normals.png").c_str());
+
+	auto painMat = std::make_shared<Material>(pipelineState);
+	painMat->SetPBR(paintAlbedo, paintNormals, paintRoughness, paintMetal);
+
+	auto mandoMat = std::make_shared<Material>(pipelineState);
+	mandoMat->SetPBR(mandoAlbedo, mandoNormals, snowRoughness, snowMetal);
+
+	auto bronzeMat = std::make_shared<Material>(pipelineState);
+	bronzeMat->SetPBR(bronzeAlbedo, bronzeNormals, bronzeRoughness, bronzeMetal);
+
+	auto snowMat = std::make_shared<Material>(pipelineState);
+	snowMat->SetPBR(snowAlbedo, snowNormals, snowRoughness, snowMetal);
+
+	auto crateMat = std::make_shared<Material>(pipelineState);
+	crateMat->SetPBR(crateAlbedo, crateNormals, crateRoughness, crateMetal);
+
 	// load meshes
-	std::wstring meshPath = L"..\\..\\Assets\\Meshes\\";
+	std::wstring meshPath = L"../../Assets/Meshes/";
 	auto cube = std::make_shared<Mesh>("Cube", FixPath(meshPath + L"cube.obj"));
 	auto sphere = std::make_shared<Mesh>("Sphere", FixPath(meshPath + L"sphere.obj"));
 	auto helix = std::make_shared<Mesh>("Helix", FixPath(meshPath + L"helix.obj"));
@@ -239,25 +318,75 @@ void Game::CreateGeometry()
 	auto mando = std::make_shared<Mesh>("Mando", FixPath(meshPath + L"mando.obj"));
 
 	// create entities
-	auto eCube = std::make_shared<GameEntity>(cube);
+	auto eCube = std::make_shared<GameEntity>(cube, bronzeMat);
 	eCube->GetTransform()->SetPosition(-6, 0, 0);
 	entities.push_back(eCube);
 
-	auto eSphere = std::make_shared<GameEntity>(sphere);
+	auto eSphere = std::make_shared<GameEntity>(sphere, painMat);
 	eSphere->GetTransform()->SetPosition(-3, 0, 0);
 	entities.push_back(eSphere);
 
-	auto eMando = std::make_shared<GameEntity>(mando);
+	auto eMando = std::make_shared<GameEntity>(mando, mandoMat);
 	eMando->GetTransform()->SetPosition(0, 0, 0);
 	entities.push_back(eMando);
 
-	auto eHelix = std::make_shared<GameEntity>(helix);
+	auto eHelix = std::make_shared<GameEntity>(helix, snowMat);
 	eHelix->GetTransform()->SetPosition(3, 0, 0);
 	entities.push_back(eHelix);
 
-	auto eTorus = std::make_shared<GameEntity>(torus);
+	auto eTorus = std::make_shared<GameEntity>(torus, crateMat);
 	eTorus->GetTransform()->SetPosition(6, 0, 0);
 	entities.push_back(eTorus);
+}
+
+// --------------------------------------------------------
+// Generates (or regenerates) lights for the scene
+// --------------------------------------------------------
+void Game::GenerateLights()
+{
+	// Reset
+	lights.clear();
+
+	// Setup directional lights
+	Light dir1 = {};
+	dir1.Type = LIGHT_TYPE_DIRECTIONAL;
+	dir1.Direction = XMFLOAT3(1, -2, 1);
+	dir1.Color = XMFLOAT3(0.8f, 0.0f, 0.0f);
+	dir1.Intensity = 3;
+
+	Light dir2 = {};
+	dir2.Type = LIGHT_TYPE_DIRECTIONAL;
+	dir2.Direction = XMFLOAT3(-1, -2, -1);
+	dir2.Color = XMFLOAT3(0.0f, 0.6f, 0.0f);
+	dir2.Intensity = 3;
+
+	Light dir3 = {};
+	dir3.Type = LIGHT_TYPE_DIRECTIONAL;
+	dir3.Direction = XMFLOAT3(0, 1, 0);
+	dir3.Color = XMFLOAT3(0.0f, 0.0f, 0.8f);
+	dir3.Intensity = 3;
+
+	// Add light to the list
+	lights.push_back(dir1);
+	lights.push_back(dir2);
+	lights.push_back(dir3);
+
+	// Create the rest of the lights
+	while (lights.size() < MAX_LIGHTS)
+	{
+		Light point = {};
+		point.Type = LIGHT_TYPE_POINT;
+		point.Position = XMFLOAT3(RandomRange(-7.0f, 7.0f), RandomRange(-7.0f, 7.0f), RandomRange(-1.0f, 1.0f));
+		point.Color = XMFLOAT3(RandomRange(0, 1), RandomRange(0, 1), RandomRange(0, 1));
+		point.Range = RandomRange(1.0f, 3.0f);
+		point.Intensity = RandomRange(1, 15);
+
+		// Add to the list
+		lights.push_back(point);
+	}
+
+	// Make sure we're exactly MAX_LIGHTS big
+	lights.resize(MAX_LIGHTS);
 }
 
 
@@ -302,7 +431,17 @@ void Game::Update(float deltaTime, float totalTime)
 	camera->Update(deltaTime);
 
 	float offset = sinf(totalTime);
+
 	size_t i = 0;
+	for (auto& l : lights)
+	{
+		auto pos = l.Position;
+		pos.z = offset * 2.0f * (i % 2 * 2.0f - 1.0f);
+		l.Position = pos;
+		i++;
+	}
+
+	i = 0;
 	for (auto& e : entities)
 	{
 		e->GetTransform()->Rotate(0, deltaTime, 0);
@@ -336,7 +475,7 @@ void Game::Draw(float deltaTime, float totalTime)
 		Graphics::CommandList->ResourceBarrier(1, &rb);
 
 		// bg color
-		float color[] = { 0.4f, 0.6f, 0.75f, 1.0f };
+		float color[] = { 0, 0, 0, 1 };
 
 		// clear RTV
 		Graphics::CommandList->ClearRenderTargetView(
@@ -359,12 +498,10 @@ void Game::Draw(float deltaTime, float totalTime)
 	{
 		// Set pipeline state
 		Graphics::CommandList->SetPipelineState(pipelineState.Get());
-
-		// root sig (must happen before root descriptor table)
-		Graphics::CommandList->SetGraphicsRootSignature(rootSignature.Get());
-
 		// set cb descriptor heap
 		Graphics::CommandList->SetDescriptorHeaps(1, Graphics::CBSRVDescriptorHeap.GetAddressOf());
+		// root sig (must happen before root descriptor table)
+		Graphics::CommandList->SetGraphicsRootSignature(rootSignature.Get());
 
 		// setup other render commands
 		Graphics::CommandList->OMSetRenderTargets(1, &Graphics::RTVHandles[Graphics::SwapChainIndex()],true, &Graphics::DSVHandle);
@@ -375,26 +512,57 @@ void Game::Draw(float deltaTime, float totalTime)
 		// loop through entitites
 		for (auto& e : entities)
 		{
-			// fill out vs external data struct
-			VertexShaderExternalData vsData = {};
-			vsData.mWorld = e->GetTransform()->GetWorldMatrix();
-			vsData.mView = camera->GetView();
-			vsData.mProjection = camera->GetProjection();
+			// get material
+			std::shared_ptr<Material> mat = e->GetMaterial();
 
-			// copy struct to GPU and set handle
-			D3D12_GPU_DESCRIPTOR_HANDLE cbHandle = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle((void*)(&vsData), sizeof(VertexShaderExternalData));
-			Graphics::CommandList->SetGraphicsRootDescriptorTable(0, cbHandle);
+			{
+				// setup pso
+				Graphics::CommandList->SetPipelineState(mat->GetPipelineState().Get());
+			}
+
+			{
+				// fill out VS external data struct
+				VertexShaderExternalData vsData = {};
+				vsData.world = e->GetTransform()->GetWorldMatrix();
+				vsData.worldInverseTranspose = e->GetTransform()->GetWorldInverseTransposeMatrix();
+				vsData.view = camera->GetView();
+				vsData.projection = camera->GetProjection();
+
+				// copy struct to GPU and set handle
+				D3D12_GPU_DESCRIPTOR_HANDLE cbHandleVS = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(
+					(void*)(&vsData), sizeof(VertexShaderExternalData));
+				Graphics::CommandList->SetGraphicsRootDescriptorTable(0, cbHandleVS);
+			}
+
+			{
+				// fill out PS external data struct
+				// Must match pixel shader definition!
+				PixelShaderExternalData psData = {};
+				psData.albedoIndex = mat->GetAlbedoIndex();
+				psData.normalMapIndex = mat->GetNormalMapIndex();
+				psData.roughnessIndex = mat->GetRoughnessIndex();
+				psData.metalnessIndex = mat->GetMetalnessIndex();
+				psData.uvScale = mat->GetUVScale();
+				psData.uvOffset = mat->GetUVOffset();
+				psData.numLights = numLights;
+				memcpy(psData.lights, &lights[0], sizeof(Light) * MAX_LIGHTS);
+
+				D3D12_GPU_DESCRIPTOR_HANDLE cbHandlePS = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(
+					(void*)(&psData), sizeof(PixelShaderExternalData));
+				Graphics::CommandList->SetGraphicsRootDescriptorTable(1, cbHandlePS);
+			}
 
 			// grab views from entity's mesh
-			D3D12_INDEX_BUFFER_VIEW ibv = e->GetMesh()->GetIndexBufferView();
-			D3D12_VERTEX_BUFFER_VIEW vbv = e->GetMesh()->GetVertexBufferView();
+			std::shared_ptr<Mesh> mesh = e->GetMesh();
+			D3D12_INDEX_BUFFER_VIEW ibv = mesh->GetIndexBufferView();
+			D3D12_VERTEX_BUFFER_VIEW vbv = mesh->GetVertexBufferView();
 
 			// set views using cmd list
-			Graphics::CommandList->IASetIndexBuffer(&ibv);
 			Graphics::CommandList->IASetVertexBuffers(0, 1, &vbv);
+			Graphics::CommandList->IASetIndexBuffer(&ibv);
 
 			// draw indexed instanced
-			Graphics::CommandList->DrawIndexedInstanced(e->GetMesh()->GetIndexCount(), 1, 0, 0, 0);
+			Graphics::CommandList->DrawIndexedInstanced((UINT)mesh->GetIndexCount(), 1, 0, 0, 0);
 		}
 	}
 
@@ -421,8 +589,7 @@ void Game::Draw(float deltaTime, float totalTime)
 		Graphics::AdvanceSwapChainIndex();
 
 		// wait for GPU then reset allocator & cmd list
-		Graphics::WaitForGPU();
-		Graphics::ResetAllocatorAndCommandList();
+		Graphics::ResetAllocatorAndCommandList(Graphics::SwapChainIndex());
 	}
 }
 

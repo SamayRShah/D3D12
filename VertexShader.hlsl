@@ -2,9 +2,10 @@
 // Vertex data cBuffer
 cbuffer VertexShaderExternalData : register(b0)
 {
-    float4x4 mWorld;
-    float4x4 mView;
-    float4x4 mProjection;
+    float4x4 world;
+    float4x4 worldInverseTranspose;
+    float4x4 view;
+    float4x4 projection;
 };
 
 // Struct representing a single vertex worth of data
@@ -14,12 +15,7 @@ cbuffer VertexShaderExternalData : register(b0)
 // - Each variable must have a semantic, which defines its usage
 struct VertexShaderInput
 { 
-	// Data type
-	//  |
-	//  |   Name          Semantic
-	//  |    |                |
-	//  v    v                v
-	float3 localPosition	: POSITION;     // XYZ position
+	float3 localPosition	: POSITION;
 	float2 uv				: TEXCOORD;
 	float3 normal			: NORMAL;
 	float3 tangent			: TANGENT;
@@ -32,12 +28,11 @@ struct VertexShaderInput
 // - Each variable must have a semantic, which defines its usage
 struct VertexToPixel
 {
-	// Data type
-	//  |
-	//  |   Name          Semantic
-	//  |    |                |
-	//  v    v                v
 	float4 screenPosition	: SV_POSITION;	// XYZW position (System Value Position)
+	float2 uv				: TEXCOORD;
+	float3 normal			: NORMAL;
+	float3 tangent			: TANGENT;
+	float3 worldPos			: POSITION;
 };
 
 // --------------------------------------------------------
@@ -51,11 +46,19 @@ VertexToPixel main( VertexShaderInput input )
 {
 	// Set up output struct
 	VertexToPixel output;
+	
+	// calc screen po
+    float4x4 wvp = mul(projection, mul(view, world));
+    output.screenPosition = mul(wvp, float4(input.localPosition, 1.0f));
+	
+	// caluclate normal & tangent in world position
+    output.normal =  normalize(mul((float3x3) worldInverseTranspose, input.normal));
+    output.tangent =  normalize(mul((float3x3) world, input.tangent));
+	
+	// calc world pos
+    output.worldPos = mul(world, float4(input.localPosition, 1)).xyz;
 
-    float4x4 mWVP = mul(mProjection, mul(mView, mWorld));
-    output.screenPosition = mul(mWVP, float4(input.localPosition, 1.0f));
-
-	// Whatever we return will make its way through the pipeline to the
-	// next programmable stage we're using (the pixel shader for now)
+	// passthrough uvs
+    output.uv = input.uv;
 	return output;
 }

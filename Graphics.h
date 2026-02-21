@@ -14,7 +14,8 @@ namespace Graphics
 {
 	// --- CONSTANTS ---
 	const unsigned int NumBackBuffers = 2;
-	const unsigned int maxConstantBuffers = 1000;
+	const unsigned int MaxConstantBuffers = 1000;
+	const unsigned int MaxTextureDescriptors = 100;
 
 	// --- GLOBAL VARS ---
 
@@ -23,7 +24,7 @@ namespace Graphics
 	inline Microsoft::WRL::ComPtr<IDXGISwapChain> SwapChain;
 
 	// Command submission
-	inline Microsoft::WRL::ComPtr<ID3D12CommandAllocator> CommandAllocator;
+	inline Microsoft::WRL::ComPtr<ID3D12CommandAllocator> CommandAllocator[NumBackBuffers];
 	inline Microsoft::WRL::ComPtr<ID3D12CommandQueue> CommandQueue;
 	inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> CommandList;
 
@@ -46,6 +47,10 @@ namespace Graphics
 	inline HANDLE WaitFenceEvent = 0;
 	inline UINT64 WaitFenceCounter = 0;
 
+	// Frame sync
+	inline Microsoft::WRL::ComPtr<ID3D12Fence> FrameSyncFence;
+	inline HANDLE FrameSyncFenceEvent;
+	inline UINT64 FrameSyncFenceCounters[NumBackBuffers]{};
 
 	// Debug Layer
 	inline Microsoft::WRL::ComPtr<ID3D12InfoQueue> InfoQueue;
@@ -64,16 +69,15 @@ namespace Graphics
 	void AdvanceSwapChainIndex();
 
 	// Resource Creation
-	Microsoft::WRL::ComPtr<ID3D12Resource> CreateStaticBuffer(
-		size_t stride, size_t count, void* data
-	);
+	unsigned int LoadTexture(const wchar_t* file, bool generateMips = true);
+	Microsoft::WRL::ComPtr<ID3D12Resource> CreateStaticBuffer(size_t stride, size_t count, void* data);
 
-	D3D12_GPU_DESCRIPTOR_HANDLE FillNextConstantBufferAndGetGPUDescriptorHandle(
-		void* data, unsigned int dataSizeInBytes
-	);
+	// Resource usage
+	D3D12_GPU_DESCRIPTOR_HANDLE FillNextConstantBufferAndGetGPUDescriptorHandle(void* data, unsigned int dataSizeInBytes);
+
 
 	// Command List & synchronization
-	void ResetAllocatorAndCommandList();
+	void ResetAllocatorAndCommandList(int index);
 	void CloseAndExecuteCommandList();
 	void WaitForGPU();
 

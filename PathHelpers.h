@@ -1,7 +1,9 @@
 #pragma once
-
 #include <string>
 #include <d3d11.h>
+
+// asset path
+// std::wstring AssetPath = L"..\\..\\Assets\\";
 
 // Helpers for determining the actual path to the executable
 std::string GetExePath();

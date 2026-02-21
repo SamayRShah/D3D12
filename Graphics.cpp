@@ -1,4 +1,7 @@
+#include <vector>
 #include <dxgi1_6.h>
+#include <WICTextureLoader.h>
+#include <ResourceUploadBatch.h>
 
 #include "Graphics.h" 
 
@@ -27,11 +30,16 @@ namespace Graphics
 		// Descriptor heap management
 		SIZE_T cbvSrvDescriptorHeapIncrementSize = 0;
 		unsigned int cbvDescriptorOffset = 0;
+		unsigned int srvDescriptorOffset = MaxConstantBuffers; // Assume first SRV will be after all possible CBVs
+
 
 		// CB upload heap management 
 		UINT64 cbUploadHeapSizeInBytes = 0;
 		UINT64 cbUploadHeapOffsetInBytes = 0;
 		void* cbUploadHeapStartAddress = 0;
+
+		// textures
+		std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> textures;
 	}
 }
 
@@ -125,11 +133,14 @@ HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight
 
 	// Setup D3D12 command allocator / queue / list
 	{
-		// Setup Allocator
-		Device->CreateCommandAllocator(
-			D3D12_COMMAND_LIST_TYPE_DIRECT,
-			IID_PPV_ARGS(CommandAllocator.GetAddressOf())
-		);
+		// Setup Allocators
+		for (unsigned int i = 0; i < NumBackBuffers; i++) {
+			Device->CreateCommandAllocator(
+				D3D12_COMMAND_LIST_TYPE_DIRECT,
+				IID_PPV_ARGS(CommandAllocator[i].GetAddressOf())
+			);
+
+		}
 
 		// Command queue
 		D3D12_COMMAND_QUEUE_DESC qDesc = {};
@@ -141,7 +152,7 @@ HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight
 		Device->CreateCommandList(
 			0, // which physical GPU will handle task
 			D3D12_COMMAND_LIST_TYPE_DIRECT,
-			CommandAllocator.Get(), // allocator for list
+			CommandAllocator[0].Get(), // allocator for list
 			0, // Initial pipeline state
 			IID_PPV_ARGS(CommandList.GetAddressOf())
 		);
@@ -174,11 +185,16 @@ HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight
 		if (FAILED(swapResult)) return swapResult;
 	}
 
-	// synchronization fence
+	// synchronization fence creation
 	{
+		// wait for GPU fence
 		Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(WaitFence.GetAddressOf()));
 		WaitFenceEvent = CreateEventEx(0, 0, 0, EVENT_ALL_ACCESS);
 		WaitFenceCounter = 0;
+
+		// frame sync fence
+		Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(FrameSyncFence.GetAddressOf()));
+		FrameSyncFenceEvent = CreateEventEx(0, 0, 0, EVENT_ALL_ACCESS);
 	}
 
 	// api has been initialized
@@ -209,7 +225,7 @@ HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight
 		D3D12_DESCRIPTOR_HEAP_DESC dhDesc = {};
 		dhDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; // accessible by shaders
 		dhDesc.NodeMask = 0; // default physical gpu
-		dhDesc.NumDescriptors = maxConstantBuffers;
+		dhDesc.NumDescriptors = MaxConstantBuffers + MaxTextureDescriptors;
 		dhDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; // able to store sbv, srv, uav
 
 		Device->CreateDescriptorHeap(&dhDesc, IID_PPV_ARGS(CBSRVDescriptorHeap.GetAddressOf()));
@@ -218,7 +234,7 @@ HRESULT Graphics::Initialize(unsigned int windowWidth, unsigned int windowHeight
 
 	// create upload heap
 	{
-		cbUploadHeapSizeInBytes = (UINT64)maxConstantBuffers * 256; // must be multiple of 256 - size of 1 byte	
+		cbUploadHeapSizeInBytes = (UINT64)MaxConstantBuffers * 256; // must be multiple of 256 - size of 1 byte	
 		cbUploadHeapOffsetInBytes = 0;
 
 		// create cb upload heap - (best for copying data from cpu )
@@ -286,7 +302,7 @@ void Graphics::ShutDown()
 // width  - New width of the window (and our viewport)
 // height - New height of the window (and our viewport)
 // --------------------------------------------------------
-void Graphics::ResizeBuffers(unsigned int width, unsigned int height) 
+void Graphics::ResizeBuffers(unsigned int width, unsigned int height)
 {
 	// API initialization guard
 	if (!apiInitialized) return;
@@ -311,7 +327,7 @@ void Graphics::ResizeBuffers(unsigned int width, unsigned int height)
 		GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
 	// setup backbuffers again (assuming descriptor heap already exists)
-	for (unsigned int i = 0; i < NumBackBuffers; i++) 
+	for (unsigned int i = 0; i < NumBackBuffers; i++)
 	{
 		// grab buffer from swapchain
 		SwapChain->GetBuffer(i, IID_PPV_ARGS(BackBuffers[i].GetAddressOf()));
@@ -564,7 +580,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE Graphics::FillNextConstantBufferAndGetGPUDescriptorH
 		// Increment the offset and loop back to the beginning if necessary
 		// which allows us to treat the descriptor heap as a ring 
 		cbvDescriptorOffset++;
-		if (cbvDescriptorOffset >= maxConstantBuffers)
+		if (cbvDescriptorOffset >= MaxConstantBuffers)
 			cbvDescriptorOffset = 0;
 
 		// Now that the CBV is ready, we return the GPU handle to it
@@ -578,27 +594,75 @@ D3D12_GPU_DESCRIPTOR_HANDLE Graphics::FillNextConstantBufferAndGetGPUDescriptorH
 // Advances swap chain backbuffer index by 1 and wraps to 0 
 // when necessary after presenting current frame
 // --------------------------------------------------------
-void Graphics::AdvanceSwapChainIndex() 
+void Graphics::AdvanceSwapChainIndex()
 {
-	currentBackBufferIndex++;
-	currentBackBufferIndex %= NumBackBuffers;
+	// signal command queue with current fence value
+	UINT64 currentFenceCounter = FrameSyncFenceCounters[currentBackBufferIndex];
+	CommandQueue->Signal(FrameSyncFence.Get(), currentFenceCounter);
+
+	// calculate next buffer index
+	unsigned int nextBuffer = currentBackBufferIndex + 1;
+	nextBuffer %= NumBackBuffers;
+
+	// if GPU not at counter yet, wait for GPU
+	if (FrameSyncFence->GetCompletedValue() < FrameSyncFenceCounters[nextBuffer])
+	{
+		FrameSyncFence->SetEventOnCompletion(FrameSyncFenceCounters[nextBuffer], FrameSyncFenceEvent);
+		WaitForSingleObject(FrameSyncFenceEvent, INFINITE);
+	}
+
+	// Frame is done - update counter
+	FrameSyncFenceCounters[nextBuffer] = currentFenceCounter + 1;
+	currentBackBufferIndex = nextBuffer;
+}
+
+// Loads Textures & Allocates memory
+unsigned int Graphics::LoadTexture(const wchar_t* file, bool generateMips)
+{
+	// Helper function for uploading resource
+	DirectX::ResourceUploadBatch upload(Device.Get());
+	upload.Begin();
+
+	// attempt to create the texture
+	Microsoft::WRL::ComPtr<ID3D12Resource> texture;
+	DirectX::CreateWICTextureFromFile(
+		Device.Get(), upload, file, texture.GetAddressOf(), generateMips);
+
+	// upload then wait before moving on
+	auto finish = upload.End(CommandQueue.Get());
+	finish.wait();
+
+	// save texture into comptr to avoid being cleaned up
+	textures.push_back(texture);
+
+	// save index of descriptor	and increment overall offset
+	unsigned int srvIndex = srvDescriptorOffset;
+	srvDescriptorOffset++;
+
+	// create srv in descriptor heap
+	// Calculate the CPU and GPU side handles for this descriptor
+	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = CBSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	cpuHandle.ptr += srvIndex * Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	Device->CreateShaderResourceView(texture.Get(), 0,cpuHandle);
+
+	return srvIndex;
 }
 
 // --------------------------------------------------------
 // Resets command allocator & list
 // ** always wait before resetting
 // --------------------------------------------------------
-void Graphics::ResetAllocatorAndCommandList() 
+void Graphics::ResetAllocatorAndCommandList(int index)
 {
-	CommandAllocator->Reset();
-	CommandList->Reset(CommandAllocator.Get(), 0);
+	CommandAllocator[index]->Reset();
+	CommandList->Reset(CommandAllocator[index].Get(), 0);
 }
 
 // --------------------------------------------------------
 // closes command list and sets GPU to work
 // ** also wait for GPU finish to reset allocator & list
 // --------------------------------------------------------
-void Graphics::CloseAndExecuteCommandList() 
+void Graphics::CloseAndExecuteCommandList()
 {
 	CommandList->Close();
 	ID3D12CommandList* lists[] = { CommandList.Get() };
@@ -609,7 +673,7 @@ void Graphics::CloseAndExecuteCommandList()
 // --------------------------------------------------------
 // Makes C++ code wait for GPU to finish executing
 // --------------------------------------------------------
-void Graphics::WaitForGPU() 
+void Graphics::WaitForGPU()
 {
 	// update fence value and place into GPU command queue
 	WaitFenceCounter++;

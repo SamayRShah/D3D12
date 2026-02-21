@@ -8,6 +8,7 @@
 
 #include "GameEntity.h"
 #include "Camera.h"
+#include "Lights.h"
 
 class Game
 {
@@ -28,6 +29,7 @@ private:
 	// Initialization helper methods - feel free to customize, combine, remove, etc.
 	void CreateRootSigAndPipelineState();
 	void CreateGeometry();
+	void GenerateLights();
 
 	// Pipeline
 	Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
@@ -40,11 +42,13 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
 	D3D12_INDEX_BUFFER_VIEW ibView{};
 
-	// Other graphics data
+	// graphics  data
 	D3D12_VIEWPORT viewport{};
 	D3D12_RECT scissorRect{};
 
-	// Game Vars
+	// scene
+	int numLights;
+	std::vector<Light> lights;
 	std::shared_ptr<FPSCamera> camera;
 	std::vector<std::shared_ptr<GameEntity>> entities;
 };
