@@ -63,8 +63,8 @@ float4 main(VertexToPixel input) : SV_TARGET
     surfaceColor.rgb = pow(surfaceColor.rgb, 2.2);
     
     // sample roughness / metalness
-    float roughness = RoughnessMap.Sample(BasicSampler, input.uv);
-    float metalness = MetalnessMap.Sample(BasicSampler, input.uv);
+    float roughness = RoughnessMap.Sample(BasicSampler, input.uv).r;
+    float metalness = MetalnessMap.Sample(BasicSampler, input.uv).r;
    
     float3 specColor = lerp(F0_NON_METAL, surfaceColor.rgb, metalness);
     
