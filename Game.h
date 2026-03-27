@@ -27,28 +27,12 @@ public:
 private:
 
 	// Initialization helper methods - feel free to customize, combine, remove, etc.
-	void CreateRootSigAndPipelineState();
-	void CreateGeometry();
-	void GenerateLights();
-
-	// Pipeline
-	Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
-	Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
-
-	// Geometry
-	Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
-	D3D12_VERTEX_BUFFER_VIEW vbView{};
-
-	Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
-	D3D12_INDEX_BUFFER_VIEW ibView{};
+	void CreateEntities();
 
 	// graphics  data
 	D3D12_VIEWPORT viewport{};
 	D3D12_RECT scissorRect{};
 
-	// scene
-	int numLights;
-	std::vector<Light> lights;
 	std::shared_ptr<FPSCamera> camera;
 	std::vector<std::shared_ptr<GameEntity>> entities;
 };

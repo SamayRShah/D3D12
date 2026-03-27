@@ -5,6 +5,7 @@
 
 #include "Mesh.h"
 #include "Graphics.h"
+#include "RayTracing.h"
 
 using namespace DirectX;
 
@@ -23,6 +24,7 @@ Mesh::Mesh(const char* name, Vertex* vertArray, size_t numVerts, unsigned int* i
 	ibView{}
 {
 	CreateBuffers(vertArray, numVerts, indexArray, numIndices);
+	rayTracingData = RayTracing::CreateBottomLevelAccelerationStructureForMesh(this);
 }
 
 // --------------------------------------------------------
@@ -260,6 +262,7 @@ Mesh::Mesh(const char* name, const std::wstring& objFile) :
 	// Close the file and create the actual buffers
 	obj.close();
 	CreateBuffers(&finalVertices[0], finalVertices.size(), &finalIndices[0], finalIndices.size());
+	rayTracingData = RayTracing::CreateBottomLevelAccelerationStructureForMesh(this);
 }
 
 
@@ -281,17 +284,17 @@ void Mesh::CreateBuffers(Vertex* vertArray, size_t numVerts, unsigned int* index
 	CalculateTangents(vertArray, numVerts, indexArray, numIndices);
 
 	// create buffers
-	m_vertexBuffer = Graphics::CreateStaticBuffer(sizeof(Vertex), numVerts, vertArray);
-	m_indexBuffer = Graphics::CreateStaticBuffer(sizeof(unsigned int), numIndices, indexArray);
+	vertexBuffer = Graphics::CreateStaticBuffer(sizeof(Vertex), numVerts, vertArray);
+	indexBuffer = Graphics::CreateStaticBuffer(sizeof(unsigned int), numIndices, indexArray);
 
 	// setup views
 	vbView.StrideInBytes = (UINT)sizeof(Vertex);
 	vbView.SizeInBytes = (UINT)(sizeof(Vertex) * numVerts);
-	vbView.BufferLocation = m_vertexBuffer->GetGPUVirtualAddress();
+	vbView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
 
 	ibView.Format = DXGI_FORMAT_R32_UINT;
 	ibView.SizeInBytes = (UINT)(sizeof(unsigned int) * numIndices);
-	ibView.BufferLocation = m_indexBuffer->GetGPUVirtualAddress();
+	ibView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
 }
 
 

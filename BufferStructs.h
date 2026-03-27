@@ -24,3 +24,10 @@ struct PixelShaderExternalData
 	unsigned int numLights;
 	Light lights[MAX_LIGHTS];
 };
+
+struct RayTracingSceneData
+{
+	DirectX::XMFLOAT4X4 InverseViewProjection;
+	DirectX::XMFLOAT3 CameraPosition;
+	float pad;
+};

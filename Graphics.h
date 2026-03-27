@@ -29,7 +29,7 @@ namespace Graphics
 	inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> CommandList;
 
 	// constant buffers
-	inline Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> CBSRVDescriptorHeap;
+	inline Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> CBVSRVDescriptorHeap;
 	inline Microsoft::WRL::ComPtr<ID3D12Resource> CBUploadHeap;
 
 	// Rendering buffers & descriptors
@@ -71,6 +71,22 @@ namespace Graphics
 	// Resource Creation
 	unsigned int LoadTexture(const wchar_t* file, bool generateMips = true);
 	Microsoft::WRL::ComPtr<ID3D12Resource> CreateStaticBuffer(size_t stride, size_t count, void* data);
+	Microsoft::WRL::ComPtr<ID3D12Resource> CreateBuffer(
+		UINT64 size,
+		D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_DEFAULT,
+		D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE,
+		UINT64 alignment = 0,
+		void* data = nullptr,
+		size_t dataSize = 0
+	);
+
+	void ReserveDescriptorHeapSlot(
+		D3D12_CPU_DESCRIPTOR_HANDLE* reservedCPUHandle,
+		D3D12_GPU_DESCRIPTOR_HANDLE* reservedGPUHandle);
+
+	unsigned int GetDescriptorIndex(D3D12_GPU_DESCRIPTOR_HANDLE handle);
+
 
 	// Resource usage
 	D3D12_GPU_DESCRIPTOR_HANDLE FillNextConstantBufferAndGetGPUDescriptorHandle(void* data, unsigned int dataSizeInBytes);

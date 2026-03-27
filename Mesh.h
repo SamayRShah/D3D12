@@ -7,6 +7,12 @@
 
 #include "Vertex.h"
 
+struct MeshRayTracingData
+{
+	D3D12_GPU_DESCRIPTOR_HANDLE IndexBufferSRV{};
+	D3D12_GPU_DESCRIPTOR_HANDLE VertexBufferSRV{};
+	Microsoft::WRL::ComPtr<ID3D12Resource> BLAS;
+};
 
 class Mesh
 {
@@ -16,19 +22,27 @@ public:
 	~Mesh() {}
 
 	// Getters for mesh data
+	const MeshRayTracingData& GetRayTracingData() { return rayTracingData; }
+
 	D3D12_VERTEX_BUFFER_VIEW GetVertexBufferView() { return vbView; }
+	Microsoft::WRL::ComPtr<ID3D12Resource> GetVertexBuffer() { return vertexBuffer; }
 	D3D12_INDEX_BUFFER_VIEW GetIndexBufferView() { return ibView; }
+	Microsoft::WRL::ComPtr<ID3D12Resource> GetIndexBuffer() { return indexBuffer; }
+
 	const char* GetName() { return name; }
 	size_t GetIndexCount() { return numIndices; }
 	size_t GetVertexCount() { return numVertices; }
 
 private:
+	// rt data
+	MeshRayTracingData rayTracingData;
+
 	// D3D buffers
 	D3D12_VERTEX_BUFFER_VIEW vbView;
-	Microsoft::WRL::ComPtr<ID3D12Resource> m_vertexBuffer;
+	Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
 
 	D3D12_INDEX_BUFFER_VIEW ibView;
-	Microsoft::WRL::ComPtr<ID3D12Resource> m_indexBuffer;
+	Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
 
 	// Total indices & vertices in this mesh
 	size_t numIndices;
