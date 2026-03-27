@@ -19,7 +19,11 @@ namespace RayTracing
 
 	// Root signatures for basic raytracing
 	inline Microsoft::WRL::ComPtr<ID3D12RootSignature> GlobalRaytracingRootSig;
-	inline Microsoft::WRL::ComPtr<ID3D12RootSignature> LocalRaytracingRootSig;
+
+	// entity data buffers
+	inline Microsoft::WRL::ComPtr<ID3D12Resource> EntityDataStructuredBuffer;
+	inline D3D12_CPU_DESCRIPTOR_HANDLE EntityDataUAV_CPU{};
+	inline D3D12_GPU_DESCRIPTOR_HANDLE EntityDataUAV_GPU{};
 
 	// Overall raytracing pipeline state object
 	// This is similar to a regular PSO, but without the standard
@@ -59,7 +63,10 @@ namespace RayTracing
 
 	// Helpers for creating acceleration structures
 	MeshRayTracingData CreateBottomLevelAccelerationStructureForMesh(Mesh* mesh);
-	void CreateTopLevelAccelerationStructureForScene(std::shared_ptr<GameEntity> entity);
+	void CreateTopLevelAccelerationStructureForScene(std::vector<std::shared_ptr<GameEntity>> entity);
+
+	// resource creation helpers
+	void CreateEntityDataBuffer(std::vector<std::shared_ptr<GameEntity>> scene);
 
 	// Helper functions for each initalization step
 	void CreateRaytracingRootSignatures();

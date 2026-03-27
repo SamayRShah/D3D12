@@ -182,6 +182,7 @@
     <ClInclude Include="PathHelpers.h" />
     <ClInclude Include="RayTracing.h" />
     <ClInclude Include="Transform.h" />
+    <ClInclude Include="Utils.h" />
     <ClInclude Include="Vertex.h" />
     <ClInclude Include="Window.h" />
   </ItemGroup>

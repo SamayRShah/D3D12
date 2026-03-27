@@ -11,6 +11,7 @@
 #include "PathHelpers.h"
 #include "Window.h"
 #include "RayTracing.h"
+#include "Utils.h"
 
 // Needed for a helper function to load pre-compiled shader files
 #pragma comment(lib, "d3dcompiler.lib")
@@ -65,61 +66,63 @@ Game::~Game()
 	Graphics::WaitForGPU();
 }
 
+
 // --------------------------------------------------------
 // Creates the geometry we're going to draw
 // --------------------------------------------------------
 void Game::CreateEntities()
 {
 	std::wstring AssetPath = L"../../Assets/";
+
 	// Create materials
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState{};
-	std::shared_ptr<Material> greyMat = std::make_shared<Material>(pipelineState, XMFLOAT3(0.5f, 0.5f, 0.5f));
-	std::shared_ptr<Material> lightGreyMat = std::make_shared<Material>(pipelineState, XMFLOAT3(0.9f, 0.9f, 1));
+	auto floorMat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.2f, 0.15f));
+	auto mandoMat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.6f, 0.5f));
 
 	// Load mesh(es)
-	std::shared_ptr<Mesh> cubeMesh = std::make_shared<Mesh>("Cube", FixPath(AssetPath + L"Meshes/cube.obj").c_str());
-	std::shared_ptr<Mesh> torusMesh = std::make_shared<Mesh>("Torus", FixPath(AssetPath + L"Meshes/torus.obj").c_str());
-	std::shared_ptr<Mesh> sphereMesh = std::make_shared<Mesh>("Sphere", FixPath(AssetPath + L"Meshes/sphere.obj").c_str());
+	auto mandoMesh = std::make_shared<Mesh>("Mando", FixPath(AssetPath + L"Meshes/Mando.obj").c_str());
+	auto cubeMesh = std::make_shared<Mesh>("Cube", FixPath(AssetPath + L"Meshes/cube.obj").c_str());
 
+	std::vector<std::shared_ptr<Mesh>> meshes;
+	auto torusMesh = std::make_shared<Mesh>("Torus", FixPath(AssetPath + L"Meshes/torus.obj").c_str());
+	meshes.push_back(torusMesh);
+	auto sphereMesh = std::make_shared<Mesh>("Sphere", FixPath(AssetPath + L"Meshes/sphere.obj").c_str());
+	meshes.push_back(sphereMesh);
+	auto crateMesh = std::make_shared<Mesh>("Crate", FixPath(AssetPath + L"Meshes/crate_wood.obj").c_str());
+	meshes.push_back(crateMesh);
+	auto helixMesh = std::make_shared<Mesh>("Helix", FixPath(AssetPath + L"Meshes/helix.obj").c_str());
+	meshes.push_back(helixMesh);
+	
 	// Floor
-	auto floor = std::make_shared<GameEntity>(cubeMesh, greyMat);
+	auto floor = std::make_shared<GameEntity>(cubeMesh, floorMat);
 	floor->GetTransform()->SetScale(50);
 	floor->GetTransform()->SetPosition(0, -51, 0);
-	// entities.push_back(floor);
+	entities.push_back(floor);
 
-	// Spinning torus
-	auto t = std::make_shared<GameEntity>(torusMesh, lightGreyMat);
-	t->GetTransform()->SetScale(2);
-	t->GetTransform()->SetPosition(0, 3, 0);
-	// entities.push_back(t);
-
-	auto sphere = std::make_shared<GameEntity>(sphereMesh, greyMat);
-	entities.push_back(sphere);
+	// Spinning mando
+	auto mando = std::make_shared<GameEntity>(mandoMesh, mandoMat);
+	mando->GetTransform()->SetPosition(0, 3, 0);
+	entities.push_back(mando);
 
 	for (int i = 0; i < 20; i++)
 	{
-		auto mat = std::make_shared<Material>(pipelineState, XMFLOAT3(
-			RandomRange(0.0f, 1.0f),
-			RandomRange(0.0f, 1.0f),
-			RandomRange(0.0f, 1.0f)));
+		auto mat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.8f, 0.4f));
+
+		float scale = RandomRange(0.25f, 0.6f);
 	
-		float scale = RandomRange(0.25f, 1.0f);
-	
-		auto sphereEnt = std::make_shared<GameEntity>(sphereMesh, mat);
-		sphereEnt->GetTransform()->SetScale(scale);
-		sphereEnt->GetTransform()->SetPosition(
-			RandomRange(-6, 6),
+		auto newEnt = std::make_shared<GameEntity>(meshes[(size_t)(RandomRange(0, meshes.size()))], mat);
+		newEnt->GetTransform()->SetScale(scale);
+		newEnt->GetTransform()->SetPosition(
+			RandomRange(-9, 9),
 			-1 + scale,
-			RandomRange(-6, 6));
+			RandomRange(-9, 9));
 	
-		// entities.push_back(sphereEnt);
+		entities.push_back(newEnt);
 	}
 
-	// Create the ray tracing entity data buffer now that we have a scene
-	// RayTracing::CreateEntityDataBuffer(entities);
-
 	// Once we have all of the BLASs ready, we can make a TLAS
-	RayTracing::CreateTopLevelAccelerationStructureForScene(entities[0]);
+	RayTracing::CreateEntityDataBuffer(entities);
+	RayTracing::CreateTopLevelAccelerationStructureForScene(entities);
 
 	// finalize initialization and wait for GPU
 	Graphics::CloseAndExecuteCommandList();
@@ -167,6 +170,29 @@ void Game::Update(float deltaTime, float totalTime)
 		Window::Quit();
 
 	camera->Update(deltaTime);
+
+	entities[1]->GetTransform()->Rotate(0, deltaTime * 0.5f, 0);
+	entities[1]->GetTransform()->SetPosition(XMFLOAT3(0, sinf(totalTime) * 0.5f + 2.5f, 0));
+	// Move stuff
+	for (int i = 2; i < entities.size(); i++)
+	{
+		XMFLOAT3 pos = entities[i]->GetTransform()->GetPosition();
+		switch (i % 2)
+		{
+		case 0:
+			pos.x = sin((totalTime + i) * 0.4f) * 4;
+			pos.y = sinf((totalTime + i) * 0.8f) + 1;
+			break;
+
+		case 1:
+			pos.z = sin((totalTime + i) * 0.4f) * 4;
+			pos.y = cosf((totalTime + i) * 0.8f) + 1;
+			break;
+		}
+		entities[i]->GetTransform()->SetPosition(pos);
+		entities[i]->GetTransform()->Rotate(deltaTime * 0.5f, deltaTime * 0.5f, deltaTime * 0.5f);
+	}
+
 }
 
 
@@ -181,7 +207,7 @@ void Game::Draw(float deltaTime, float totalTime)
 
 	// Raytracing - create TLAS then trace it
 	{
-		RayTracing::CreateTopLevelAccelerationStructureForScene(entities[0]);
+		RayTracing::CreateTopLevelAccelerationStructureForScene(entities);
 		RayTracing::Raytrace(camera, currentBackBuffer);
 	}
 
