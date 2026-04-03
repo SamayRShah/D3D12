@@ -103,9 +103,7 @@
     <FxCompile Include="VertexShader.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
-    <FxCompile Include="C:\Users\litga\Downloads\A5 - Files\Raytracing.hlsl">
-      <Filter>Shaders</Filter>
-    </FxCompile>
+    <FxCompile Include="Raytracing.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
