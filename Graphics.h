@@ -80,6 +80,11 @@ namespace Graphics
 		void* data = 0,
 		size_t dataSize = 0
 	);
+	unsigned int CreateCubeMap(
+		const wchar_t* right, const wchar_t* left,
+		const wchar_t* up, const wchar_t* down,
+		const wchar_t* front, const wchar_t* back
+	);
 
 	void ReserveDescriptorHeapSlot(
 		D3D12_CPU_DESCRIPTOR_HANDLE* reservedCPUHandle,

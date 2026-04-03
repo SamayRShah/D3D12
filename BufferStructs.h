@@ -36,6 +36,7 @@ struct RayTracingDrawData
 	unsigned int EntityDataDescriptorIndex;
 	unsigned int SceneTLASDescriptorIndex;
 	unsigned int OutputUAVDescriptorIndex;
+	unsigned int SkyboxDescriptorIndex;
 };
 
 // overall scene data 
@@ -43,14 +44,30 @@ struct RayTracingSceneData
 {
 	DirectX::XMFLOAT4X4 InverseViewProjection;
 	DirectX::XMFLOAT3 CameraPosition;
-	float pad;
+	unsigned int RaysPerPixel;
 };
 
 // per entity data
 struct RayTracingEntityData
 {
+	// properties
 	DirectX::XMFLOAT4 Color;
 	unsigned int VertexBufferDescriptorIndex;
 	unsigned int IndexBufferDescriptorIndex;
-	float pad[2];
+
+	// textures
+	DirectX::XMFLOAT2 UVScale;
+	DirectX::XMFLOAT2 UVOffset;
+	unsigned int AlbedoIndex;
+	unsigned int NormalMapIndex;
+	unsigned int RoughnessIndex;
+	unsigned int MetalnessIndex;
+
+	// values
+	float Roughness;
+	float Metalness;
+	float Emissive;
+	float IOR;
+	float Alpha;
+	float pad;
 };

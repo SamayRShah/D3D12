@@ -103,14 +103,26 @@ void RayTracing::CreateRaytracingRootSignatures()
 			rootParams[0].Constants.ShaderRegister = 0;
 		}
 
+		// create basic wrap sampler
+		D3D12_STATIC_SAMPLER_DESC basicSampler = {};
+		basicSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		basicSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		basicSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+		basicSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+		basicSampler.MaxLOD = D3D12_FLOAT32_MAX;
+		basicSampler.ShaderRegister = 0;
+		basicSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		D3D12_STATIC_SAMPLER_DESC samplers[] = {basicSampler};
+
 		// Create the global root signature
 		Microsoft::WRL::ComPtr<ID3DBlob> blob;
 		Microsoft::WRL::ComPtr<ID3DBlob> errors;
 		D3D12_ROOT_SIGNATURE_DESC globalRootSigDesc = {};
 		globalRootSigDesc.NumParameters = ARRAYSIZE(rootParams);
 		globalRootSigDesc.pParameters = rootParams;
-		globalRootSigDesc.NumStaticSamplers = 0;
-		globalRootSigDesc.pStaticSamplers = 0;
+		globalRootSigDesc.NumStaticSamplers = ARRAYSIZE(samplers);
+		globalRootSigDesc.pStaticSamplers = samplers;
 		globalRootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
 
 		D3D12SerializeRootSignature(&globalRootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, blob.GetAddressOf(), errors.GetAddressOf());
@@ -148,7 +160,7 @@ void RayTracing::CreateRaytracingPipelineState(std::wstring raytracingShaderLibr
 	//       need to refer to others by address, and a vector resizing causes
 	//       the underlying array to be recreated (so addresses are invalidated)
 	std::vector<D3D12_STATE_SUBOBJECT> subobjects;
-	subobjects.reserve(8);
+	subobjects.reserve(11);
 
 	// === Ray generation shader ===
 	D3D12_EXPORT_DESC rayGenExportDesc = {};
@@ -168,15 +180,17 @@ void RayTracing::CreateRaytracingPipelineState(std::wstring raytracingShaderLibr
 	subobjects.push_back(rayGenSubObj);
 
 	// === Miss shader ===
-	D3D12_EXPORT_DESC missExportDesc = {};
-	missExportDesc.Name = L"Miss";
-	missExportDesc.Flags = D3D12_EXPORT_FLAG_NONE;
+	D3D12_EXPORT_DESC missExportDesc[2] {};
+	missExportDesc[0].Name = L"Miss";
+	missExportDesc[0].Flags = D3D12_EXPORT_FLAG_NONE;
+	missExportDesc[1].Name = L"MissShadow";
+	missExportDesc[1].Flags = D3D12_EXPORT_FLAG_NONE;
 
 	D3D12_DXIL_LIBRARY_DESC	missLibDesc = {};
 	missLibDesc.DXILLibrary.BytecodeLength = blob->GetBufferSize();
 	missLibDesc.DXILLibrary.pShaderBytecode = blob->GetBufferPointer();
-	missLibDesc.NumExports = 1;
-	missLibDesc.pExports = &missExportDesc;
+	missLibDesc.NumExports = 2;
+	missLibDesc.pExports = missExportDesc;
 
 	D3D12_STATE_SUBOBJECT missSubObj = {};
 	missSubObj.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
@@ -185,15 +199,21 @@ void RayTracing::CreateRaytracingPipelineState(std::wstring raytracingShaderLibr
 	subobjects.push_back(missSubObj);
 
 	// === Closest hit shader ===
-	D3D12_EXPORT_DESC closestHitExportDesc = {};
-	closestHitExportDesc.Name = L"ClosestHit";
-	closestHitExportDesc.Flags = D3D12_EXPORT_FLAG_NONE;
+	D3D12_EXPORT_DESC closestHitExportDesc[4] = {};
+	closestHitExportDesc[0].Name = L"ClosestHit";
+	closestHitExportDesc[0].Flags = D3D12_EXPORT_FLAG_NONE;
+	closestHitExportDesc[1].Name = L"ClosestHitShadow";
+	closestHitExportDesc[1].Flags = D3D12_EXPORT_FLAG_NONE;
+	closestHitExportDesc[2].Name = L"ClosestHitEmissive";
+	closestHitExportDesc[2].Flags = D3D12_EXPORT_FLAG_NONE;
+	closestHitExportDesc[3].Name = L"ClosestHitDielectric";
+	closestHitExportDesc[3].Flags = D3D12_EXPORT_FLAG_NONE;
 
 	D3D12_DXIL_LIBRARY_DESC	closestHitLibDesc = {};
 	closestHitLibDesc.DXILLibrary.BytecodeLength = blob->GetBufferSize();
 	closestHitLibDesc.DXILLibrary.pShaderBytecode = blob->GetBufferPointer();
-	closestHitLibDesc.NumExports = 1;
-	closestHitLibDesc.pExports = &closestHitExportDesc;
+	closestHitLibDesc.NumExports = 4;
+	closestHitLibDesc.pExports = closestHitExportDesc;
 
 	D3D12_STATE_SUBOBJECT closestHitSubObj = {};
 	closestHitSubObj.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
@@ -213,9 +233,41 @@ void RayTracing::CreateRaytracingPipelineState(std::wstring raytracingShaderLibr
 
 	subobjects.push_back(hitGroup);
 
+	// === Hit group 2 ===
+	D3D12_HIT_GROUP_DESC hitGroupShadowDesc = {};
+	hitGroupShadowDesc.ClosestHitShaderImport = L"ClosestHitShadow";
+	hitGroupShadowDesc.HitGroupExport = L"HitGroupShadow";
+
+	D3D12_STATE_SUBOBJECT hitGroupShadow = {};
+	hitGroupShadow.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+	hitGroupShadow.pDesc = &hitGroupShadowDesc;
+	subobjects.push_back(hitGroupShadow);
+
+	// === Hit group 3 ===
+	D3D12_HIT_GROUP_DESC hitGroupEmissiveDesc = {};
+	hitGroupEmissiveDesc.ClosestHitShaderImport = L"ClosestHitEmissive";
+	hitGroupEmissiveDesc.HitGroupExport = L"HitGroupEmissive";
+
+	D3D12_STATE_SUBOBJECT hitGroupEmissive = {};
+	hitGroupEmissive.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+	hitGroupEmissive.pDesc = &hitGroupEmissiveDesc;
+
+	subobjects.push_back(hitGroupEmissive);
+
+	// === Hit group 4 ===
+	D3D12_HIT_GROUP_DESC hitGroupDielectricDesc = {};
+	hitGroupDielectricDesc.ClosestHitShaderImport = L"ClosestHitDielectric";
+	hitGroupDielectricDesc.HitGroupExport = L"HitGroupDielectric";
+
+	D3D12_STATE_SUBOBJECT hitGroupDielectric = {};
+	hitGroupDielectric.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+	hitGroupDielectric.pDesc = &hitGroupDielectricDesc;
+
+	subobjects.push_back(hitGroupDielectric);
+
 	// === Shader config (payload) ===
 	D3D12_RAYTRACING_SHADER_CONFIG shaderConfigDesc = {};
-	shaderConfigDesc.MaxPayloadSizeInBytes = sizeof(DirectX::XMFLOAT3);	// Assuming a float3 color for now
+	shaderConfigDesc.MaxPayloadSizeInBytes = sizeof(DirectX::XMFLOAT3) + sizeof(unsigned int) * 2; // pass color(float3), raysPerPixel, rayPerPixelIndex
 	shaderConfigDesc.MaxAttributeSizeInBytes = sizeof(DirectX::XMFLOAT2); // Assuming a float2 for barycentric coords for now
 
 	D3D12_STATE_SUBOBJECT shaderConfigSubObj = {};
@@ -226,12 +278,15 @@ void RayTracing::CreateRaytracingPipelineState(std::wstring raytracingShaderLibr
 
 	// === Association - Payload and shaders ===
 	// Names of shaders that use the payload
-	const wchar_t* payloadShaderNames[] = { L"RayGen", L"Miss", L"HitGroup" };
+	const wchar_t* payloadShaderNames[] = { 
+		L"RayGen", 
+		L"Miss", L"MissShadow",
+		L"HitGroup", L"HitGroupShadow",L"HitGroupEmissive", L"HitGroupDielectric"};
 
 	D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION shaderPayloadAssociation = {};
 	shaderPayloadAssociation.NumExports = ARRAYSIZE(payloadShaderNames);
 	shaderPayloadAssociation.pExports = payloadShaderNames;
-	shaderPayloadAssociation.pSubobjectToAssociate = &subobjects[4]; // Payload config above!
+	shaderPayloadAssociation.pSubobjectToAssociate = &subobjects[7]; // Payload config above!
 
 	D3D12_STATE_SUBOBJECT shaderPayloadAssociationObject = {};
 	shaderPayloadAssociationObject.Type = D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION;
@@ -283,8 +338,8 @@ void RayTracing::CreateShaderTables()
 
 	// How many of each type of shader?
 	UINT64 rayGenCount = 1;
-	UINT64 missCount = 1;
-	UINT64 hitGroupCount = 1;
+	UINT64 missCount = 2;
+	UINT64 hitGroupCount = 3;
 
 	// Ray Gen Table setup
 	{
@@ -329,6 +384,11 @@ void RayTracing::CreateShaderTables()
 			addr,
 			RaytracingPipelineProperties->GetShaderIdentifier(L"Miss"), 
 			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		addr += missRecordSize;
+		memcpy(
+			addr,
+			RaytracingPipelineProperties->GetShaderIdentifier(L"MissShadow"),
+			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
 		MissTable->Unmap(0, 0);
 	}
 
@@ -336,7 +396,6 @@ void RayTracing::CreateShaderTables()
 	{
 		// Calculate the overall size
 		hitGroupRecordSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES; // Shader ID
-
 		hitGroupRecordSize = ALIGN(hitGroupRecordSize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT); // Aligned properly
 		hitGroupTableSize = hitGroupRecordSize * hitGroupCount;
 
@@ -353,6 +412,22 @@ void RayTracing::CreateShaderTables()
 			addr, 
 			RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroup"), 
 			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		addr += hitGroupRecordSize;
+		memcpy(
+			addr,
+			RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroupShadow"),
+			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		addr += hitGroupRecordSize;
+		memcpy(
+			addr,
+			RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroupEmissive"),
+			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		addr += hitGroupRecordSize;
+		memcpy(
+			addr,
+			RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroupDielectric"),
+			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+
 		HitGroupTable->Unmap(0, 0);
 	}
 }
@@ -559,7 +634,7 @@ void RayTracing::CreateTopLevelAccelerationStructureForScene(std::vector<std::sh
 		return;
 
 	std::vector<D3D12_RAYTRACING_INSTANCE_DESC> descs;
-	for (auto entity : entities)
+	for (std::shared_ptr<GameEntity> entity : entities)
 	{
 		// Grab the entity's transform and transpose to column major
 		DirectX::XMFLOAT4X4 transform = entity->GetTransform()->GetWorldMatrix();
@@ -568,7 +643,7 @@ void RayTracing::CreateTopLevelAccelerationStructureForScene(std::vector<std::sh
 		// Describe the BLAS instance(s) that make up the TLAS
 		D3D12_RAYTRACING_INSTANCE_DESC instanceDesc{};
 		instanceDesc.InstanceID = 0;
-		instanceDesc.InstanceContributionToHitGroupIndex = 0;
+		instanceDesc.InstanceContributionToHitGroupIndex = entity->GetMaterial()->GetEmissive() > 0 ? 2 : entity->GetMaterial()->GetAlpha() <  0.8f ? 3 : 0;
 		instanceDesc.InstanceMask = 0xFF;
 		memcpy(&instanceDesc.Transform, &transform, sizeof(float) * 3 * 4); // Copy first [3][4] elements
 		instanceDesc.AccelerationStructure = entity->GetMesh()->GetRayTracingData().BLAS->GetGPUVirtualAddress();
@@ -689,11 +764,22 @@ void RayTracing::CreateEntityDataBuffer(std::vector<std::shared_ptr<GameEntity>>
 	{
 		// Set up this entity's data
 		RayTracingEntityData data{};
+		std::shared_ptr<Material> mat = scene[i]->GetMaterial();
 		DirectX::XMFLOAT3 c = scene[i]->GetMaterial()->GetColorTint();
 		data.Color = DirectX::XMFLOAT4(c.x, c.y, c.z, 1);
 		data.IndexBufferDescriptorIndex = Graphics::GetDescriptorIndex(scene[i]->GetMesh()->GetRayTracingData().IndexBufferSRV);
 		data.VertexBufferDescriptorIndex = Graphics::GetDescriptorIndex(scene[i]->GetMesh()->GetRayTracingData().VertexBufferSRV);
-
+		data.UVScale = mat->GetUVScale();
+		data.UVOffset = mat->GetUVOffset();
+		data.AlbedoIndex = mat->GetAlbedoIndex();
+		data.NormalMapIndex = mat->GetNormalMapIndex();
+		data.RoughnessIndex = mat->GetRoughnessIndex();
+		data.MetalnessIndex = mat->GetMetalnessIndex();
+		data.Roughness = mat->GetRoughness();
+		data.Metalness = mat->GetMetalness();
+		data.Emissive = mat->GetEmissive();
+		data.IOR = mat->GetIOR();
+		data.Alpha = mat->GetAlpha();
 		entityData.push_back(data);
 	}
 
@@ -732,7 +818,10 @@ void RayTracing::CreateEntityDataBuffer(std::vector<std::shared_ptr<GameEntity>>
 // --------------------------------------------------------
 // Performs the actual raytracing work
 // --------------------------------------------------------
-void RayTracing::Raytrace(std::shared_ptr<Camera> camera, Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer)
+void RayTracing::Raytrace(
+	std::shared_ptr<Camera> camera, Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer,
+	unsigned int skyboxDescriptorIndex
+)
 {
 	if (!dxrResourcesInitialized || !dxrAvailable)
 		return;
@@ -758,6 +847,7 @@ void RayTracing::Raytrace(std::shared_ptr<Camera> camera, Microsoft::WRL::ComPtr
 	// Grab and fill a constant buffer
 	RayTracingSceneData sceneData = {};
 	sceneData.CameraPosition = camera->GetTransform()->GetPosition();
+	sceneData.RaysPerPixel = raysPerPixel;
 
 	DirectX::XMFLOAT4X4 view = camera->GetView();
 	DirectX::XMFLOAT4X4 proj = camera->GetProjection();
@@ -784,6 +874,7 @@ void RayTracing::Raytrace(std::shared_ptr<Camera> camera, Microsoft::WRL::ComPtr
 		data.OutputUAVDescriptorIndex = Graphics::GetDescriptorIndex(RaytracingOutputUAV_GPU);
 		data.EntityDataDescriptorIndex = Graphics::GetDescriptorIndex(EntityDataUAV_GPU);
 		data.SceneTLASDescriptorIndex = Graphics::GetDescriptorIndex(TLASDescriptor_GPU);
+		data.SkyboxDescriptorIndex = skyboxDescriptorIndex;
 
 		DXRCommandList->SetComputeRoot32BitConstants(0, sizeof(RayTracingDrawData) / sizeof(unsigned int), &data, 0);
 

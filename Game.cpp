@@ -72,25 +72,36 @@ Game::~Game()
 // --------------------------------------------------------
 void Game::CreateEntities()
 {
-	std::wstring AssetPath = L"../../Assets/";
+	skyboxDescriptorIndex = Graphics::CreateCubeMap(
+		SKY_ASSET(L"Clouds Pink")
+	);
 
-	// Create materials
+	// create materials
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState{};
 	auto floorMat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.2f, 0.15f));
-	auto mandoMat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.6f, 0.5f));
+	floorMat->SetTint(XMFLOAT3(0.6f, 0.6f, 0.9f));
+	floorMat->SetNormalMapIndex(Graphics::LoadTexture(ASSET(L"Textures/PBR/snow_normals.png")));
+	floorMat->SetAlbedoIndex(Graphics::LoadTexture(ASSET(L"Textures/PBR/snow_albedo.png")));
+	floorMat->SetRoughnessIndex(Graphics::LoadTexture(ASSET(L"Textures/PBR/snow_roughness.png")));
 
-	// Load mesh(es)
-	auto mandoMesh = std::make_shared<Mesh>("Mando", FixPath(AssetPath + L"Meshes/Mando.obj").c_str());
-	auto cubeMesh = std::make_shared<Mesh>("Cube", FixPath(AssetPath + L"Meshes/cube.obj").c_str());
+	auto mandoMat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.6f, 0.5f));
+	mandoMat->SetAlbedoIndex(Graphics::LoadTexture(ASSET(L"Textures/mando.png")));
+	mandoMat->SetNormalMapIndex(Graphics::LoadTexture(ASSET(L"Textures/mando_normals.png")));
+	mandoMat->SetMetalness(1);
+	mandoMat->SetRoughness(0);
+
+	// load meshes
+	auto mandoMesh = std::make_shared<Mesh>("Mando", ASSET(L"Meshes/Mando.obj"));
+	auto cubeMesh = std::make_shared<Mesh>("Cube", ASSET(L"Meshes/cube.obj"));
 
 	std::vector<std::shared_ptr<Mesh>> meshes;
-	auto torusMesh = std::make_shared<Mesh>("Torus", FixPath(AssetPath + L"Meshes/torus.obj").c_str());
+	auto torusMesh = std::make_shared<Mesh>("Torus", ASSET(L"Meshes/torus.obj"));
 	meshes.push_back(torusMesh);
-	auto sphereMesh = std::make_shared<Mesh>("Sphere", FixPath(AssetPath + L"Meshes/sphere.obj").c_str());
+	auto sphereMesh = std::make_shared<Mesh>("Sphere", ASSET(L"Meshes/sphere.obj"));
 	meshes.push_back(sphereMesh);
-	auto crateMesh = std::make_shared<Mesh>("Crate", FixPath(AssetPath + L"Meshes/crate_wood.obj").c_str());
+	auto crateMesh = std::make_shared<Mesh>("Crate", ASSET(L"Meshes/crate_wood.obj"));
 	meshes.push_back(crateMesh);
-	auto helixMesh = std::make_shared<Mesh>("Helix", FixPath(AssetPath + L"Meshes/helix.obj").c_str());
+	auto helixMesh = std::make_shared<Mesh>("Helix", ASSET(L"Meshes/helix.obj"));
 	meshes.push_back(helixMesh);
 	
 	// Floor
@@ -107,7 +118,7 @@ void Game::CreateEntities()
 	for (int i = 0; i < 20; i++)
 	{
 		auto mat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.8f, 0.4f));
-
+		mat->SetRoughness(RandomRange(0.0f, 1.0f) * RandomRange(0.0f, 1.0f));
 		float scale = RandomRange(0.25f, 0.6f);
 	
 		auto newEnt = std::make_shared<GameEntity>(meshes[(size_t)(RandomRange(0, meshes.size()))], mat);
@@ -117,6 +128,37 @@ void Game::CreateEntities()
 			-1 + scale,
 			RandomRange(-9, 9));
 	
+		entities.push_back(newEnt);
+	}
+	for (int i = 0; i < 8; i++)
+	{
+		auto mat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.8f, 0.4f));
+		mat->SetRoughness(RandomRange(0.0f, 0.1f));
+		mat->SetAlpha(0);
+		float scale = RandomRange(0.25f, 0.6f);
+
+		auto newEnt = std::make_shared<GameEntity>(meshes[(size_t)(RandomRange(0, meshes.size()))], mat);
+		newEnt->GetTransform()->SetScale(scale);
+		newEnt->GetTransform()->SetPosition(
+			RandomRange(-9, 9),
+			-1 + scale,
+			RandomRange(-9, 9));
+
+		entities.push_back(newEnt);
+	}
+	for (int i = 0; i < 8; i++)
+	{
+		auto mat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.8f, 0.4f));
+		mat->SetEmissive(RandomRange(1.0f, 5.0f));
+
+		float scale = RandomRange(0.25f, 0.6f);
+		auto newEnt = std::make_shared<GameEntity>(meshes[(size_t)(RandomRange(0, meshes.size()))], mat);
+		newEnt->GetTransform()->SetScale(scale);
+		newEnt->GetTransform()->SetPosition(
+			RandomRange(-9, 9),
+			-1 + scale,
+			RandomRange(-9, 9));
+
 		entities.push_back(newEnt);
 	}
 
@@ -192,7 +234,6 @@ void Game::Update(float deltaTime, float totalTime)
 		entities[i]->GetTransform()->SetPosition(pos);
 		entities[i]->GetTransform()->Rotate(deltaTime * 0.5f, deltaTime * 0.5f, deltaTime * 0.5f);
 	}
-
 }
 
 
@@ -208,7 +249,7 @@ void Game::Draw(float deltaTime, float totalTime)
 	// Raytracing - create TLAS then trace it
 	{
 		RayTracing::CreateTopLevelAccelerationStructureForScene(entities);
-		RayTracing::Raytrace(camera, currentBackBuffer);
+		RayTracing::Raytrace(camera, currentBackBuffer, skyboxDescriptorIndex);
 	}
 
 	// Present
@@ -225,6 +266,7 @@ void Game::Draw(float deltaTime, float totalTime)
 		Graphics::AdvanceSwapChainIndex();
 
 		// wait for GPU then reset allocator & cmd list
+		Graphics::WaitForGPU();
 		Graphics::ResetAllocatorAndCommandList(Graphics::SwapChainIndex());
 	}
 }

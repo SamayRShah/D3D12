@@ -24,6 +24,11 @@ public:
 	DirectX::XMFLOAT3 GetColorTint() { return colorTint; }
 	DirectX::XMFLOAT2 GetUVScale() { return uvScale; }
 	DirectX::XMFLOAT2 GetUVOffset() { return uvOffset; }
+	float GetRoughness() { return roughness; }
+	float GetMetalness() { return metalness; }
+	float GetEmissive() { return emissive; }
+	float GetIOR() { return ior; }
+	float GetAlpha() { return alpha; }
 
 	// texture getters
 	// unsigned int GetTexture(std::string tex) { return textures[tex]; }
@@ -35,8 +40,13 @@ public:
 	// setters
 	void SetPipelineState(Microsoft::WRL::ComPtr <ID3D12PipelineState> ps) { pipelineState = ps; }
 	void SetTint(DirectX::XMFLOAT3 t) { colorTint = t; }
+	void SetRoughness(float r) { roughness = r; }
+	void SetMetalness(float m) { metalness = m; }
 	void SetUVScale(DirectX::XMFLOAT2 s) { uvScale = s; }
 	void SetUVOffset(DirectX::XMFLOAT2 o) { uvOffset = o; }
+	void SetEmissive(float e) { emissive = e; }
+	void SetIOR(float i) { ior = i; }
+	void SetAlpha(float a) { alpha = a; }
 
 	// texture setters
 	// void SetTexture(std::string tex, unsigned int index) { textures[tex] = index; }
@@ -58,6 +68,11 @@ private:
 	DirectX::XMFLOAT3 colorTint;
 	DirectX::XMFLOAT2 uvScale;
 	DirectX::XMFLOAT2 uvOffset;
+	float roughness;
+	float metalness;
+	float emissive;
+	float ior;
+	float alpha;
 
 	// Textures
 	// std::unordered_map<std::string, unsigned int> textures; // other textures

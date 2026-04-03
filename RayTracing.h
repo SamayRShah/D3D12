@@ -13,6 +13,8 @@
 namespace RayTracing
 {
 	// --- GLOBAL VARS ---
+	inline unsigned int raysPerPixel = 10;
+	
 	// Raytracing-specific versions of base DX12 objects
 	inline Microsoft::WRL::ComPtr<ID3D12Device5> DXRDevice;
 	inline Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> DXRCommandList;
@@ -59,7 +61,8 @@ namespace RayTracing
 		unsigned int outputHeight);
 	void Raytrace(
 		std::shared_ptr<Camera> camera, 
-		Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer);
+		Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer,
+		unsigned int skyboxDescriptorIndex = -1);
 
 	// Helpers for creating acceleration structures
 	MeshRayTracingData CreateBottomLevelAccelerationStructureForMesh(Mesh* mesh);

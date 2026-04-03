@@ -6,5 +6,6 @@ Material::Material(
 ) 
 	: 
 	pipelineState(pipelineState), colorTint(tint), uvScale(uvScale), uvOffset(uvOffset),
-	albedoIndex(-1), normalMapIndex(-1), roughnessIndex(-1), metalnessIndex(-1)
+	albedoIndex(-1), normalMapIndex(-1), roughnessIndex(-1), metalnessIndex(-1), 
+	roughness(1), metalness(1), emissive(0), ior(1.5f), alpha(1)
 {}
