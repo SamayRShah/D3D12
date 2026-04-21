@@ -96,7 +96,6 @@ namespace Graphics
 	// Resource usage
 	D3D12_GPU_DESCRIPTOR_HANDLE FillNextConstantBufferAndGetGPUDescriptorHandle(void* data, unsigned int dataSizeInBytes);
 
-
 	// Command List & synchronization
 	void ResetAllocatorAndCommandList(int index);
 	void CloseAndExecuteCommandList();

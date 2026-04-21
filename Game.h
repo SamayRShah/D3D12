@@ -9,6 +9,7 @@
 #include "GameEntity.h"
 #include "Camera.h"
 #include "Lights.h"
+#include "SkyBox.h"
 
 class Game
 {
@@ -22,32 +23,31 @@ public:
 	// Primary functions
 	void Update(float deltaTime, float totalTime);
 	void Draw(float deltaTime, float totalTime);
+	void RayTrace(float deltaTime, float totalTime);
 	void OnResize();
 private:
 
-	// Initialization helper methods - feel free to customize, combine, remove, etc.
+	// init helpers
 	void CreateEntities();
+	void CreateLights();
+	void CreateRootSigAndPipelineState();
 
 	// graphics  data
 	D3D12_VIEWPORT viewport{};
 	D3D12_RECT scissorRect{};
 
+	// raster pipeline
+	Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
+
 	// scene
-	unsigned int skyboxDescriptorIndex = -1;
+	unsigned int lightCount;
+	std::vector<Light> lights;
 	std::shared_ptr<FPSCamera> camera;
 	std::vector<std::shared_ptr<GameEntity>> entities;
+	std::shared_ptr<SkyBox> skyBox;
 public:
 	// utils
 	std::wstring AssetPath = L"../../Assets/";
-
-#define ASSET(asset) FixPath(AssetPath + asset).c_str()
-
-#define SKY_ASSET(path) \
-    FixPath(AssetPath + L"Textures/Skies/" + path + L"/right.png").c_str(), \
-    FixPath(AssetPath + L"Textures/Skies/" + path + L"/left.png").c_str(), \
-    FixPath(AssetPath + L"Textures/Skies/" + path + L"/up.png").c_str(), \
-    FixPath(AssetPath + L"Textures/Skies/" + path + L"/down.png").c_str(), \
-    FixPath(AssetPath + L"Textures/Skies/" + path + L"/front.png").c_str(), \
-    FixPath(AssetPath + L"Textures/Skies/" + path + L"/back.png").c_str()  
 };
 

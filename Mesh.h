@@ -25,7 +25,9 @@ public:
 	const MeshRayTracingData& GetRayTracingData() { return rayTracingData; }
 
 	D3D12_VERTEX_BUFFER_VIEW GetVertexBufferView() { return vbView; }
+	D3D12_GPU_DESCRIPTOR_HANDLE GetVertexBufferDescriptorHandle() { return vbGPUDescriptorHandle; }
 	Microsoft::WRL::ComPtr<ID3D12Resource> GetVertexBuffer() { return vertexBuffer; }
+
 	D3D12_INDEX_BUFFER_VIEW GetIndexBufferView() { return ibView; }
 	Microsoft::WRL::ComPtr<ID3D12Resource> GetIndexBuffer() { return indexBuffer; }
 
@@ -39,10 +41,12 @@ private:
 
 	// D3D buffers
 	D3D12_VERTEX_BUFFER_VIEW vbView;
+	D3D12_GPU_DESCRIPTOR_HANDLE vbGPUDescriptorHandle; // for bindless
 	Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
 
 	D3D12_INDEX_BUFFER_VIEW ibView;
 	Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
+
 
 	// Total indices & vertices in this mesh
 	size_t numIndices;

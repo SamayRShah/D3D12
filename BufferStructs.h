@@ -5,27 +5,58 @@
 
 // === Rasterization ===
 
-struct VertexShaderExternalData 
+struct SkyDrawIndices
 {
-	DirectX::XMFLOAT4X4 world;
-	DirectX::XMFLOAT4X4 worldInverseTranspose;
+	unsigned int vsVertexBufferIndex;
+	unsigned int vsCBIndex;
+	unsigned int psSkyboxIndex;
+};
+
+struct DrawDescriptorIndices
+{
+	unsigned int vsVertexBufferIndex;
+	unsigned int vsPerFrameCBIndex;
+	unsigned int vsPerObjectCBIndex;
+	unsigned int psPerFrameCBIndex;
+	unsigned int psPerObjectCBIndex;
+};
+
+struct VertexShaderPerFrameData
+{
 	DirectX::XMFLOAT4X4 view;
 	DirectX::XMFLOAT4X4 projection;
 };
 
-// Must match pixel shader definition!
-struct PixelShaderExternalData
+struct VertexShaderPerObjectData
 {
+	DirectX::XMFLOAT4X4 world;
+	DirectX::XMFLOAT4X4 worldInverseTranspose;
+};
+
+struct PixelShaderPerFrameData
+{
+	DirectX::XMFLOAT3 cameraPosition;
+	int lightCount;
+	Light lights[MAX_LIGHTS];
+};
+
+struct PixelShaderPerObjectData
+{
+	// constants
+	DirectX::XMFLOAT3 color;
+	float roughness;
+	float metalness;
+	float pad[3];
+
+	// textures
 	unsigned int albedoIndex;
 	unsigned int normalMapIndex;
 	unsigned int roughnessIndex;
 	unsigned int metalnessIndex;
 	DirectX::XMFLOAT2 uvScale;
 	DirectX::XMFLOAT2 uvOffset;
-	DirectX::XMFLOAT3 cameraPosition;
-	unsigned int numLights;
-	Light lights[MAX_LIGHTS];
 };
+
 
 // === RayTracing ===
 
