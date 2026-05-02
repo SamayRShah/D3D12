@@ -16,7 +16,7 @@ SkyBox::SkyBox
 ) : skyMesh(mesh)
 {
 	InitRenderStates();
-	skyBoxDescriptorIndex = Graphics::CreateCubeMap(right, left, up, down, front, back);
+	texture = Graphics::CreateCubeMap(right, left, up, down, front, back);
 }
 
 void SkyBox::InitRenderStates()
@@ -131,7 +131,7 @@ void SkyBox::Draw(std::shared_ptr<Camera> camera)
 
 	// draw data
 	SkyDrawIndices drawData{};
-	drawData.psSkyboxIndex = skyBoxDescriptorIndex;
+	drawData.psSkyboxIndex = texture.SRV.GPUDescriptorIndex;
 	drawData.vsVertexBufferIndex = Graphics::GetDescriptorIndex(skyMesh->GetVertexBufferDescriptorHandle());
 
 	// per frame data

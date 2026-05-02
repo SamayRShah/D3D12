@@ -772,7 +772,7 @@ void Graphics::AdvanceSwapChainIndex()
 }
 
 // Loads Textures & Allocates memory
-unsigned int Graphics::LoadTexture(const wchar_t* file, bool generateMips)
+TextureDetails Graphics::LoadTexture(const wchar_t* file, bool generateMips)
 {
 	// Helper function for uploading resource
 	DirectX::ResourceUploadBatch upload(Device.Get());
@@ -789,21 +789,32 @@ unsigned int Graphics::LoadTexture(const wchar_t* file, bool generateMips)
 
 	// save texture into comptr to avoid being cleaned up
 	textures.push_back(texture);
+	D3D12_RESOURCE_DESC desc = texture->GetDesc();
 
 	// save index of descriptor	and increment overall offset
 	unsigned int srvIndex = srvDescriptorOffset;
 	srvDescriptorOffset++;
 
-	// create srv in descriptor heap
-	// Calculate the CPU and GPU side handles for this descriptor
-	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = CBVSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	cpuHandle.ptr += srvIndex * Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-	Device->CreateShaderResourceView(texture.Get(), 0,cpuHandle);
+	// Final texture details
+	TextureDetails details;
+	details.Texture = texture;
 
-	return srvIndex;
+	// Create the SRV
+	D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+	srv.Format = desc.Format;
+	srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srv.Texture2D.MipLevels = desc.MipLevels;
+	srv.Texture2D.MostDetailedMip = 0;
+
+	ReserveDescriptorHeapSlot(&details.SRV.CPUHandle, &details.SRV.GPUHandle);
+	Device->CreateShaderResourceView(texture.Get(), &srv, details.SRV.CPUHandle);
+	details.SRV.GPUDescriptorIndex = GetDescriptorIndex(details.SRV.GPUHandle);
+
+	return details;
 }
 
-unsigned int Graphics::CreateCubeMap(
+TextureDetails Graphics::CreateCubeMap(
 	const wchar_t* right, const wchar_t* left,
 	const wchar_t* up, const wchar_t* down,
 	const wchar_t* front, const wchar_t* back)
@@ -906,7 +917,7 @@ unsigned int Graphics::CreateCubeMap(
 	unsigned int srvIndex = srvDescriptorOffset;
 	srvDescriptorOffset++;
 
-	// setup descriptor
+	// Set up descriptor
 	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 	srvDesc.Format = faceDesc.Format;
 	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
@@ -915,14 +926,76 @@ unsigned int Graphics::CreateCubeMap(
 	srvDesc.TextureCube.MostDetailedMip = 0;
 	srvDesc.TextureCube.ResourceMinLODClamp = 0;
 
-	// create srv in main descriptor heap at offset
-	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = CBVSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	cpuHandle.ptr += srvIndex * Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-	Device->CreateShaderResourceView(cubeMap.Get(), &srvDesc, cpuHandle);
+	// Final details
+	TextureDetails details;
+	details.Texture = cubeMap;
 
-	// Send back the index of the descriptor
-	return srvIndex;
+	// Create the SRV in the main descriptor heap at the appropriate offset
+	ReserveDescriptorHeapSlot(&details.SRV.CPUHandle, &details.SRV.GPUHandle);
+	Device->CreateShaderResourceView(cubeMap.Get(), &srvDesc, details.SRV.CPUHandle);
+	details.SRV.GPUDescriptorIndex = GetDescriptorIndex(details.SRV.GPUHandle);
+
+	// Send back the details
+	return details;
 }
+
+TextureDetails Graphics::CreateTexture(
+	unsigned int width,
+	unsigned int height,
+	unsigned int arraySize,
+	unsigned int mipLevels,
+	D3D12_RESOURCE_FLAGS flags,
+	DXGI_FORMAT colorFormat,
+	float clearColorR,
+	float clearColorG,
+	float clearColorB,
+	float clearColorA)
+{
+	// Set up the heap and then resource itself
+	D3D12_HEAP_PROPERTIES props = {};
+	props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+	props.CreationNodeMask = 1;
+	props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+	props.Type = D3D12_HEAP_TYPE_DEFAULT;
+	props.VisibleNodeMask = 1;
+
+	D3D12_RESOURCE_DESC desc = {};
+	desc.Alignment = 0;
+	desc.DepthOrArraySize = arraySize;
+	desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	desc.Flags = flags;
+	desc.Format = colorFormat;
+	desc.Height = height;
+	desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	desc.MipLevels = mipLevels;
+	desc.SampleDesc.Count = 1;
+	desc.SampleDesc.Quality = 0;
+	desc.Width = width;
+
+	// Default clear value
+	D3D12_CLEAR_VALUE clear{};
+	clear.Color[0] = clearColorR;
+	clear.Color[1] = clearColorG;
+	clear.Color[2] = clearColorB;
+	clear.Color[3] = clearColorA;
+	clear.Format = colorFormat;
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> texture;
+	Graphics::Device->CreateCommittedResource(
+		&props,
+		D3D12_HEAP_FLAG_NONE,
+		&desc,
+		D3D12_RESOURCE_STATE_COMMON,
+		&clear,
+		IID_PPV_ARGS(texture.GetAddressOf()));
+
+	// Fill out texture details
+	TextureDetails details;
+	details.Texture = texture;
+
+	return details;
+}
+
 
 // --------------------------------------------------------
 // Resets command allocator & list

@@ -4,6 +4,7 @@
 
 #include "Mesh.h"
 #include "Camera.h"
+#include "Graphics.h"
 
 class SkyBox
 {
@@ -15,7 +16,7 @@ public:
 		std::shared_ptr<Mesh> mesh);
 	
 	void Draw(std::shared_ptr<Camera> camera);
-	unsigned int GetDescriptorIndex() { return skyBoxDescriptorIndex; }
+	unsigned int GetDescriptorIndex() { return texture.SRV.GPUDescriptorIndex; }
 private:
 	// init helpers
 	void InitRenderStates();
@@ -24,6 +25,6 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
 
-	unsigned int skyBoxDescriptorIndex;
 	std::shared_ptr<Mesh> skyMesh;
+	TextureDetails texture;
 };

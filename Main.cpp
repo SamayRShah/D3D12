@@ -126,7 +126,6 @@ int WINAPI WinMain(
 			// Update and draw
 			game->Update(deltaTime, totalTime);
 			game->Draw(deltaTime, totalTime);
-			// game->RayTrace(deltaTime, totalTime);
 
 			// Notify Input system about end of frame
 			Input::EndOfFrame();

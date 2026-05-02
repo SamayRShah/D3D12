@@ -13,6 +13,9 @@
 #include "RayTracing.h"
 #include "Utils.h"
 
+#include "ImGui/imgui_impl_dx12.h"
+#include "ImGui/imgui_impl_win32.h"
+
 // Needed for a helper function to load pre-compiled shader files
 #pragma comment(lib, "d3dcompiler.lib")
 
@@ -44,6 +47,30 @@ using namespace DirectX;
 // --------------------------------------------------------
 Game::Game()
 {
+	// Reserve a descriptor slot for ImGui's font texture
+	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle;
+	D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle;
+	Graphics::ReserveDescriptorHeapSlot(&cpuHandle, &gpuHandle);
+
+	// Initialize ImGui itself & platform/renderer backends
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGui::StyleColorsDark();
+	ImGui_ImplWin32_Init(Window::Handle());
+	{
+		ImGui_ImplDX12_InitInfo info{};
+		info.CommandQueue = Graphics::CommandQueue.Get();
+		info.Device = Graphics::Device.Get();
+		info.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+		info.LegacySingleSrvCpuDescriptor = cpuHandle;
+		info.LegacySingleSrvGpuDescriptor = gpuHandle;
+		info.NumFramesInFlight = Graphics::NumBackBuffers;
+		info.RTVFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+		info.SrvDescriptorHeap = Graphics::CBVSRVDescriptorHeap.Get();
+
+		ImGui_ImplDX12_Init(&info);
+	}
+
 	// seed random
 	srand((unsigned int)time(0));
 
@@ -81,6 +108,11 @@ Game::~Game()
 {
 	// wait for GPU before shutdown
 	Graphics::WaitForGPU();
+
+	// ImGui clean up
+	ImGui_ImplDX12_Shutdown();
+	ImGui_ImplWin32_Shutdown();
+	ImGui::DestroyContext();
 }
 
 void Game::CreateRootSigAndPipelineState()
@@ -89,10 +121,18 @@ void Game::CreateRootSigAndPipelineState()
 	Microsoft::WRL::ComPtr<ID3DBlob> vsByteCode;
 	Microsoft::WRL::ComPtr<ID3DBlob> psByteCode;
 
+	Microsoft::WRL::ComPtr<ID3DBlob> fullscreenVS;
+	Microsoft::WRL::ComPtr<ID3DBlob> rasterPS;
+	Microsoft::WRL::ComPtr<ID3DBlob> compositePS;
+
 	// load shaders
 	{
 		D3DReadFileToBlob(FixPath(L"VS_PBR.cso").c_str(), vsByteCode.GetAddressOf());
 		D3DReadFileToBlob(FixPath(L"PS_PBR.cso").c_str(), psByteCode.GetAddressOf());
+
+		D3DReadFileToBlob(FixPath(L"VS_FullScreen.cso").c_str(), fullscreenVS.GetAddressOf());
+		D3DReadFileToBlob(FixPath(L"PS_Raster.cso").c_str(), rasterPS.GetAddressOf());
+		D3DReadFileToBlob(FixPath(L"PS_Composite.cso").c_str(), compositePS.GetAddressOf());
 	}
 
 	// root signature
@@ -150,26 +190,37 @@ void Game::CreateRootSigAndPipelineState()
 			IID_PPV_ARGS(rootSignature.GetAddressOf()));
 	}
 
-	// pipeline state
+	// Pipeline state
 	{
+		// Describe the pipeline state
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+
+		// -- Input assembler related ---
 		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+		// Overall primitive topology type (triangle, line, etc.) is set here 
+		// IASetPrimTop() is still used to set list/strip/adj options
+		// See: https://docs.microsoft.com/en-us/windows/desktop/direct3d12/managing-graphics-pipeline-state-in-direct3d-12
+
+		// Root sig
 		psoDesc.pRootSignature = rootSignature.Get();
 
-		// shaders
+		// -- Shaders (VS/PS) --- 
 		psoDesc.VS.pShaderBytecode = vsByteCode->GetBufferPointer();
 		psoDesc.VS.BytecodeLength = vsByteCode->GetBufferSize();
-		psoDesc.PS.pShaderBytecode = psByteCode->GetBufferPointer();
-		psoDesc.PS.BytecodeLength = psByteCode->GetBufferSize();
+		psoDesc.PS.pShaderBytecode = rasterPS->GetBufferPointer();
+		psoDesc.PS.BytecodeLength = rasterPS->GetBufferSize();
 
-		// rts
-		psoDesc.NumRenderTargets = 1;
+		// -- Render targets ---
+		psoDesc.NumRenderTargets = 4;
 		psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+		psoDesc.RTVFormats[1] = DXGI_FORMAT_R8G8B8A8_UNORM;
+		psoDesc.RTVFormats[2] = DXGI_FORMAT_R8G8B8A8_UNORM;
+		psoDesc.RTVFormats[3] = DXGI_FORMAT_R32_FLOAT;
 		psoDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 		psoDesc.SampleDesc.Count = 1;
 		psoDesc.SampleDesc.Quality = 0;
 
-		// state
+		// -- States ---
 		psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
 		psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
 		psoDesc.RasterizerState.DepthClipEnable = true;
@@ -183,13 +234,33 @@ void Game::CreateRootSigAndPipelineState()
 		psoDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
 		psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
+		// -- Misc ---
 		psoDesc.SampleMask = 0xffffffff;
+
+		// Create the pipe state object
 		Graphics::Device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(pipelineState.GetAddressOf()));
+
+		// ============================================
+		// Also create the "full screen texture" PSO
+		// - Assuming the same root sig is compatible
+
+		psoDesc.PS.BytecodeLength = compositePS->GetBufferSize();
+		psoDesc.PS.pShaderBytecode = compositePS->GetBufferPointer();
+
+		psoDesc.VS.BytecodeLength = fullscreenVS->GetBufferSize();
+		psoDesc.VS.pShaderBytecode = fullscreenVS->GetBufferPointer();
+
+		psoDesc.NumRenderTargets = 1;
+		psoDesc.RTVFormats[1] = DXGI_FORMAT_UNKNOWN; // Means "not used" here
+		psoDesc.RTVFormats[2] = DXGI_FORMAT_UNKNOWN;
+		psoDesc.RTVFormats[3] = DXGI_FORMAT_UNKNOWN;
+		Graphics::Device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(fullScreenTexturePSO.GetAddressOf()));
 	}
 
-	// setup scissor rect
+	// Set up the viewport and scissor rectangle
 	{
-		// view port setup
+		// Set up the viewport so we render into the correct
+		// portion of the render target
 		viewport = {};
 		viewport.TopLeftX = 0;
 		viewport.TopLeftY = 0;
@@ -198,13 +269,79 @@ void Game::CreateRootSigAndPipelineState()
 		viewport.MinDepth = 0.0f;
 		viewport.MaxDepth = 1.0f;
 
-		// render to whole window
+		// Define a scissor rectangle that defines a portion of
+		// the render target for clipping.  This is different from
+		// a viewport in that it is applied after the pixel shader.
+		// We need at least one of these, but we're rendering to 
+		// the entire window, so it'll be the same size.
 		scissorRect = {};
 		scissorRect.left = 0;
 		scissorRect.top = 0;
 		scissorRect.right = Window::Width();
 		scissorRect.bottom = Window::Height();
 	}
+
+	// Create RTV heap for render targets
+	D3D12_DESCRIPTOR_HEAP_DESC dhDesc{};
+	dhDesc.NumDescriptors = MaxRenderTargets;
+	dhDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+	Graphics::Device->CreateDescriptorHeap(&dhDesc, IID_PPV_ARGS(rtvDescriptorHeap.GetAddressOf()));
+
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv_cpu_start = rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	unsigned int descSize = Graphics::Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+	// Create render targets (note that depth uses R32 format!)
+	RenderTargets[GBUFFER_ALBEDO] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+	RenderTargets[GBUFFER_NORMALS] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+	RenderTargets[GBUFFER_MATERIAL] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+	RenderTargets[GBUFFER_DEPTH] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, DXGI_FORMAT_R32_FLOAT, 1, 0, 0, 0);
+
+	// Update the texture details to point to contiguous spots in the RTV heap
+	for (unsigned int i = 0; i < 4; i++)
+	{
+		RenderTargets[i].RTV = rtv_cpu_start;
+		RenderTargets[i].RTV.ptr += descSize * i;
+	}
+
+	// Create RTVs for render targets
+	D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
+	rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+	rtvDesc.Texture2D.MipSlice = 0;
+	rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+	// Create the RTVs next to each other in the heap
+	Graphics::Device->CreateRenderTargetView(RenderTargets[GBUFFER_ALBEDO].Texture.Get(), &rtvDesc, RenderTargets[GBUFFER_ALBEDO].RTV);
+	Graphics::Device->CreateRenderTargetView(RenderTargets[GBUFFER_NORMALS].Texture.Get(), &rtvDesc, RenderTargets[GBUFFER_NORMALS].RTV);
+	Graphics::Device->CreateRenderTargetView(RenderTargets[GBUFFER_MATERIAL].Texture.Get(), &rtvDesc, RenderTargets[GBUFFER_MATERIAL].RTV);
+
+	// Depth needs different format
+	rtvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+	Graphics::Device->CreateRenderTargetView(RenderTargets[GBUFFER_DEPTH].Texture.Get(), &rtvDesc, RenderTargets[GBUFFER_DEPTH].RTV);
+
+	// Create SRVs, too
+	D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+	srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srv.Texture2D.MipLevels = 1;
+	srv.Texture2D.MostDetailedMip = 0;
+	srv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+	// Reserve 4 SRVs
+	for (unsigned int i = 0; i < 4; i++)
+		Graphics::ReserveDescriptorHeapSlot(&RenderTargets[i].SRV.CPUHandle, &RenderTargets[i].SRV.GPUHandle);
+
+	// Create
+	Graphics::Device->CreateShaderResourceView(RenderTargets[GBUFFER_ALBEDO].Texture.Get(), &srv, RenderTargets[GBUFFER_ALBEDO].SRV.CPUHandle);
+	Graphics::Device->CreateShaderResourceView(RenderTargets[GBUFFER_NORMALS].Texture.Get(), &srv, RenderTargets[GBUFFER_NORMALS].SRV.CPUHandle);
+	Graphics::Device->CreateShaderResourceView(RenderTargets[GBUFFER_MATERIAL].Texture.Get(), &srv, RenderTargets[GBUFFER_MATERIAL].SRV.CPUHandle);
+
+	// Depth has different format
+	srv.Format = DXGI_FORMAT_R32_FLOAT;
+	Graphics::Device->CreateShaderResourceView(RenderTargets[GBUFFER_DEPTH].Texture.Get(), &srv, RenderTargets[GBUFFER_DEPTH].SRV.CPUHandle);
+
+	// Update SRV indices
+	for (unsigned int i = 0; i < 4; i++)
+		RenderTargets[i].SRV.GPUDescriptorIndex = Graphics::GetDescriptorIndex(RenderTargets[i].SRV.GPUHandle);
 }
 
 
@@ -237,8 +374,8 @@ void Game::CreateEntities()
 	floorMat->SetMetalness(0.5f);
 
 	auto mandoMat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.6f, 0.5f));
-	mandoMat->SetAlbedoIndex(Graphics::LoadTexture(ASSET(L"Textures/mando.png")));
-	mandoMat->SetNormalMapIndex(Graphics::LoadTexture(ASSET(L"Textures/mando_normals.png")));
+	mandoMat->SetAlbedoTexture(Graphics::LoadTexture(ASSET(L"Textures/mando.png")));
+	mandoMat->SetNormalMapTexture(Graphics::LoadTexture(ASSET(L"Textures/mando_normals.png")));
 	mandoMat->SetMetalness(0.8f);
 	mandoMat->SetRoughness(0.2f);
 
@@ -443,6 +580,10 @@ void Game::OnResize()
 // --------------------------------------------------------
 void Game::Update(float deltaTime, float totalTime)
 {
+	// Set up the new frame for ImGui, then build this frame's UI
+	UINewFrame(deltaTime);
+	BuildUI();
+
 	// Example input checking: Quit if the escape key is pressed
 	if (Input::KeyDown(VK_ESCAPE))
 		Window::Quit();
@@ -474,11 +615,10 @@ void Game::Update(float deltaTime, float totalTime)
 
 void Game::Draw(float deltaTime, float totalTime)
 {
-	// get current back buffer
-	Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer =
-		Graphics::BackBuffers[Graphics::SwapChainIndex()];
+	// Grab the current back buffer for this frame
+	Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer = Graphics::BackBuffers[Graphics::SwapChainIndex()];
 
-	// clear render target
+	// Clearing the render target
 	{
 		// Transition the back buffer from present to render target
 		D3D12_RESOURCE_BARRIER rb = {};
@@ -506,25 +646,51 @@ void Game::Draw(float deltaTime, float totalTime)
 			1.0f,	// Max depth = 1.0f
 			0,		// Not clearing stencil, but need a value
 			0, 0);	// No scissor rects
+
+		// Transition RTs and clear, too
+		float depthClear[4] = { 1,0,0,0 };
+		for (unsigned int i = 0; i < 4; i++)
+		{
+			rb.Transition.pResource = RenderTargets[i].Texture.Get();
+			rb.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+			rb.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+			Graphics::CommandList->ResourceBarrier(1, &rb);
+
+			// Clear using one of two colors
+			Graphics::CommandList->ClearRenderTargetView(
+				RenderTargets[i].RTV,
+				i == GBUFFER_DEPTH ? depthClear : color,
+				0, 0);
+		}
 	}
-	
-	// render
+
+	// Rendering here!
 	{
-		// set pipeline state & buffers
+		// Set overall pipeline state
 		Graphics::CommandList->SetPipelineState(pipelineState.Get());
+
+		// Set constant buffer descriptor heap
 		Graphics::CommandList->SetDescriptorHeaps(1, Graphics::CBVSRVDescriptorHeap.GetAddressOf());
+
+		// Root sig
 		Graphics::CommandList->SetGraphicsRootSignature(rootSignature.Get());
 
-		// render traget, viewport, and topology
-		Graphics::CommandList->OMSetRenderTargets(1, &Graphics::RTVHandles[Graphics::SwapChainIndex()], true, &Graphics::DSVHandle);
+		// Set multiple render targets
+		Graphics::CommandList->OMSetRenderTargets(
+			4,                             // Set 4 at once
+			&RenderTargets[GBUFFER_ALBEDO].RTV,  // Address of first
+			true,                          // True means all 4 are next to each other
+			&Graphics::DSVHandle);         // Depth buffer DSV
+
+		// Set up other commands for rendering
 		Graphics::CommandList->RSSetViewports(1, &viewport);
 		Graphics::CommandList->RSSetScissorRects(1, &scissorRect);
 		Graphics::CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-		// per frame data
+		// Set up per-frame data
 		DrawDescriptorIndices drawData{};
 
-		// vertex shader
+		// Per-frame vertex data
 		{
 			VertexShaderPerFrameData vsFrame{};
 			vsFrame.view = camera->GetView();
@@ -536,7 +702,7 @@ void Game::Draw(float deltaTime, float totalTime)
 			drawData.vsPerFrameCBIndex = Graphics::GetDescriptorIndex(cbHandleVS);
 		}
 
-		// pixel shader
+		// Per-frame pixel data
 		{
 			PixelShaderPerFrameData psFrame{};
 			psFrame.cameraPosition = camera->GetTransform()->GetPosition();
@@ -549,23 +715,27 @@ void Game::Draw(float deltaTime, float totalTime)
 			drawData.psPerFrameCBIndex = Graphics::GetDescriptorIndex(cbHandlePS);
 		}
 
-		// entities
-		for (std::shared_ptr<GameEntity> e: entities)
+		// Loop through the entities
+		for (auto& e : entities)
 		{
+			// Grab the material for this entity
 			std::shared_ptr<Material> mat = e->GetMaterial();
 
 			// Set the pipeline state for this material
-			Graphics::CommandList->SetPipelineState(mat->GetPipelineState().Get());
-			
-			// add vb data
+			{
+				Graphics::CommandList->SetPipelineState(mat->GetPipelineState().Get());
+			}
+
 			drawData.vsVertexBufferIndex = Graphics::GetDescriptorIndex(e->GetMesh()->GetVertexBufferDescriptorHandle());
 
-			// vs entity data
+			// Set up the data we intend to use for drawing this entity
 			{
 				VertexShaderPerObjectData vsData = {};
 				vsData.world = e->GetTransform()->GetWorldMatrix();
 				vsData.worldInverseTranspose = e->GetTransform()->GetWorldInverseTransposeMatrix();
 
+				// Send this to a chunk of the constant buffer heap
+				// and grab the GPU handle for it so we can set it for this draw
 				D3D12_GPU_DESCRIPTOR_HANDLE cbHandleVS = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(
 					(void*)(&vsData), sizeof(VertexShaderPerObjectData));
 
@@ -582,9 +752,13 @@ void Game::Draw(float deltaTime, float totalTime)
 				psData.roughnessIndex = mat->GetRoughnessIndex();
 				psData.metalnessIndex = mat->GetMetalnessIndex();
 				psData.color = mat->GetColorTint();
-				psData.roughness = mat->GetRoughness();
 				psData.metalness = mat->GetMetalness();
+				psData.roughness = mat->GetRoughness();
+				psData.uvScale = mat->GetUVScale();
+				psData.uvOffset = mat->GetUVOffset();
 
+				// Send this to a chunk of the constant buffer heap
+				// and grab the GPU handle for it so we can set it for this draw
 				D3D12_GPU_DESCRIPTOR_HANDLE cbHandlePS = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(
 					(void*)(&psData), sizeof(PixelShaderPerObjectData));
 
@@ -597,16 +771,52 @@ void Game::Draw(float deltaTime, float totalTime)
 				&drawData,
 				0);
 
-			// get index buffer view
+			// Grab the mesh and its buffer views
 			std::shared_ptr<Mesh> mesh = e->GetMesh();
 			D3D12_INDEX_BUFFER_VIEW  ibv = mesh->GetIndexBufferView();
 
-			// set geometry and draw
+			// Set the geometry
 			Graphics::CommandList->IASetIndexBuffer(&ibv);
+
+			// Draw
 			Graphics::CommandList->DrawIndexedInstanced((UINT)mesh->GetIndexCount(), 1, 0, 0, 0);
 		}
+	}
 
-		skyBox->Draw(camera);
+	// Skybox after opaque objects
+	skyBox->Draw(camera);
+
+	// Back to back buffer
+	Graphics::CommandList->OMSetRenderTargets(1, &Graphics::RTVHandles[Graphics::SwapChainIndex()], true, &Graphics::DSVHandle);
+
+	// Transition RTs to pixel shader resources
+	for (unsigned int i = 0; i < 4; i++)
+	{
+		D3D12_RESOURCE_BARRIER rb = {};
+		rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		rb.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+		rb.Transition.pResource = RenderTargets[i].Texture.Get();
+		rb.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+		rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		Graphics::CommandList->ResourceBarrier(1, &rb);
+	}
+
+	// Put the pixels on the screen
+	{
+		Graphics::CommandList->SetPipelineState(fullScreenTexturePSO.Get());
+		Graphics::CommandList->SetGraphicsRootSignature(rootSignature.Get());
+
+		// Set index of 1 texture
+		Graphics::CommandList->SetGraphicsRoot32BitConstants(0, 1, &RenderTargets[GBUFFER_ALBEDO].SRV.GPUDescriptorIndex, 0);
+
+		Graphics::CommandList->DrawInstanced(3, 1, 0, 0);
+	}
+
+	// ImGui Render after all other scene objects
+	{
+		ImGui::Render();
+		ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), Graphics::CommandList.Get());
 	}
 
 	// Present
@@ -629,13 +839,131 @@ void Game::Draw(float deltaTime, float totalTime)
 		Graphics::SwapChain->Present(
 			vsync ? 1 : 0,
 			vsync ? 0 : DXGI_PRESENT_ALLOW_TEARING);
-		Graphics::AdvanceSwapChainIndex();
 
-		// Wait for the GPU to be done and then reset the command list & allocator
-		Graphics::WaitForGPU();
+		// Reset the command list & allocator for the upcoming frame
+		Graphics::AdvanceSwapChainIndex();
 		Graphics::ResetAllocatorAndCommandList(Graphics::SwapChainIndex());
 	}
 }
+
+// --------------------------------------------------------
+// Prepares a new frame for the UI, feeding it fresh
+// input and time information for this new frame.
+// --------------------------------------------------------
+void Game::UINewFrame(float deltaTime)
+{
+	// Feed fresh input data to ImGui
+	ImGuiIO& io = ImGui::GetIO();
+	io.DeltaTime = deltaTime;
+	io.DisplaySize.x = (float)Window::Width();
+	io.DisplaySize.y = (float)Window::Height();
+
+	// Reset the frame
+	ImGui_ImplDX12_NewFrame();
+	ImGui_ImplWin32_NewFrame();
+	ImGui::NewFrame();
+
+	// Determine new input capture
+	Input::SetKeyboardCapture(io.WantCaptureKeyboard);
+	Input::SetMouseCapture(io.WantCaptureMouse);
+}
+
+
+// --------------------------------------------------------
+// Builds the UI for the current frame
+// --------------------------------------------------------
+void Game::BuildUI()
+{
+	// Should we show the built-in demo window?
+	if (showUIDemoWindow)
+	{
+		ImGui::ShowDemoWindow();
+	}
+
+	// Actually build our custom UI, starting with a window
+	ImGui::Begin("Inspector");
+	{
+		// Set a specific amount of space for widget labels
+		ImGui::PushItemWidth(-160); // Negative value sets label width
+
+		// === Overall details ===
+		if (ImGui::TreeNode("App Details"))
+		{
+			ImGui::Spacing();
+			ImGui::Text("Frame rate: %f fps", ImGui::GetIO().Framerate);
+			ImGui::Text("Window Client Size: %dx%d", Window::Width(), Window::Height());
+
+			// Should we show the demo window?
+			if (ImGui::Button(showUIDemoWindow ? "Hide ImGui Demo Window" : "Show ImGui Demo Window"))
+				showUIDemoWindow = !showUIDemoWindow;
+
+			ImGui::Spacing();
+
+			// Finalize the tree node
+			ImGui::TreePop();
+		}
+
+		// === Multiple Render Targets ===
+		if (ImGui::TreeNode("Render Targets"))
+		{
+			float width = ImGui::GetWindowWidth();
+			ImVec2 size = ImVec2(
+				width,
+				width / Window::AspectRatio());
+
+			for (unsigned int i = 0; i < 4; i++)
+			{
+				// Convert descriptor index BACK into actual GPU handle
+				ImageWithHover(RenderTargets[i].SRV.GPUHandle, size);
+			}
+
+			// Finalize the tree node
+			ImGui::TreePop();
+		}
+
+
+	}
+	ImGui::End();
+}
+
+void Game::ImageWithHover(D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle, const ImVec2& size)
+{
+	// Draw the image
+	ImGui::Image(ImTextureRef(gpuDescHandle.ptr), size);
+
+	// Check for hover
+	if (ImGui::IsItemHovered())
+	{
+		// Zoom amount and aspect of the image
+		float zoom = 0.03f;
+		float aspect = (float)size.x / size.y;
+
+		// Get the coords of the image
+		ImVec2 topLeft = ImGui::GetItemRectMin();
+		ImVec2 bottomRight = ImGui::GetItemRectMax();
+
+		// Get the mouse pos as a percent across the image, clamping near the edge
+		ImVec2 mousePosGlobal = ImGui::GetMousePos();
+		ImVec2 mousePos = ImVec2(mousePosGlobal.x - topLeft.x, mousePosGlobal.y - topLeft.y);
+		ImVec2 uvPercent = ImVec2(mousePos.x / size.x, mousePos.y / size.y);
+
+		uvPercent.x = max(uvPercent.x, zoom / 2);
+		uvPercent.x = min(uvPercent.x, 1 - zoom / 2);
+		uvPercent.y = max(uvPercent.y, zoom / 2 * aspect);
+		uvPercent.y = min(uvPercent.y, 1 - zoom / 2 * aspect);
+
+		// Figure out the uv coords for the zoomed image
+		ImVec2 uvTL = ImVec2(uvPercent.x - zoom / 2, uvPercent.y - zoom / 2 * aspect);
+		ImVec2 uvBR = ImVec2(uvPercent.x + zoom / 2, uvPercent.y + zoom / 2 * aspect);
+
+		// Draw a floating box with a zoomed view of the image
+		ImGui::BeginTooltip();
+		ImGui::Image(ImTextureRef(gpuDescHandle.ptr), ImVec2(256, 256), uvTL, uvBR);
+		ImGui::EndTooltip();
+	}
+}
+
+
 
 
 // --------------------------------------------------------

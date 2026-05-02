@@ -10,6 +10,22 @@
 #pragma comment (lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 
+
+struct DescriptorDetails
+{
+	D3D12_CPU_DESCRIPTOR_HANDLE CPUHandle{};
+	D3D12_GPU_DESCRIPTOR_HANDLE GPUHandle{};
+	unsigned int GPUDescriptorIndex{};
+};
+
+struct TextureDetails
+{
+	Microsoft::WRL::ComPtr<ID3D12Resource> Texture;
+	DescriptorDetails SRV{};
+	DescriptorDetails UAV{};
+	D3D12_CPU_DESCRIPTOR_HANDLE RTV{};
+};
+
 namespace Graphics
 {
 	// --- CONSTANTS ---
@@ -69,7 +85,7 @@ namespace Graphics
 	void AdvanceSwapChainIndex();
 
 	// Resource Creation
-	unsigned int LoadTexture(const wchar_t* file, bool generateMips = true);
+	TextureDetails LoadTexture(const wchar_t* file, bool generateMips = true);
 	Microsoft::WRL::ComPtr<ID3D12Resource> CreateStaticBuffer(size_t stride, size_t count, void* data);
 	Microsoft::WRL::ComPtr<ID3D12Resource> CreateBuffer(
 		UINT64 size,
@@ -80,10 +96,18 @@ namespace Graphics
 		void* data = 0,
 		size_t dataSize = 0
 	);
-	unsigned int CreateCubeMap(
+	TextureDetails CreateCubeMap(
 		const wchar_t* right, const wchar_t* left,
 		const wchar_t* up, const wchar_t* down,
 		const wchar_t* front, const wchar_t* back
+	);
+	TextureDetails CreateTexture(
+		unsigned int width, unsigned int height,
+		unsigned int arraySize = 1, unsigned int mipLevels = 1,
+		D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE,
+		DXGI_FORMAT colorFormat = DXGI_FORMAT_R8G8B8A8_UNORM,
+		float ccR = 0.0f, float ccG = 0.0f,
+		float ccB = 0.0f, float ccA = 1.0f
 	);
 
 	void ReserveDescriptorHeapSlot(

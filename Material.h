@@ -8,6 +8,7 @@
 
 #include "Camera.h"
 #include "Transform.h"
+#include "Graphics.h"
 
 class Material
 {
@@ -32,10 +33,10 @@ public:
 
 	// texture getters
 	// unsigned int GetTexture(std::string tex) { return textures[tex]; }
-	unsigned int GetAlbedoIndex() { return albedoIndex; }
-	unsigned int GetNormalMapIndex() { return normalMapIndex; }
-	unsigned int GetRoughnessIndex() { return  roughnessIndex; }
-	unsigned int GetMetalnessIndex() { return  metalnessIndex; }
+	unsigned int GetAlbedoIndex() { return albedoTexture.SRV.GPUDescriptorIndex; }
+	unsigned int GetNormalMapIndex() { return normalMapTexture.SRV.GPUDescriptorIndex;}
+	unsigned int GetRoughnessIndex() { return roughnessTexture.SRV.GPUDescriptorIndex; }
+	unsigned int GetMetalnessIndex() { return metalnessTexture.SRV.GPUDescriptorIndex; }
 
 	// setters
 	void SetPipelineState(Microsoft::WRL::ComPtr <ID3D12PipelineState> ps) { pipelineState = ps; }
@@ -51,14 +52,14 @@ public:
 	// texture setters
 	// void SetTexture(std::string tex, unsigned int index) { textures[tex] = index; }
 	void SetPBR(
-		unsigned int a, unsigned int n, unsigned int r, unsigned int m)
+		TextureDetails a, TextureDetails n, TextureDetails r, TextureDetails m)
 	{
-		albedoIndex = a; normalMapIndex = n; roughnessIndex = r; metalnessIndex = m;
+		albedoTexture = a; normalMapTexture = n; roughnessTexture = r; metalnessTexture = m;
 	}
-	void SetAlbedoIndex(unsigned int index) { albedoIndex = index; }
-	void SetNormalMapIndex(unsigned int index) { normalMapIndex = index; }
-	void SetRoughnessIndex(unsigned int index) { roughnessIndex = index; }
-	void SetMetalnessIndex(unsigned int index) { metalnessIndex = index; }
+	void SetAlbedoTexture(TextureDetails texture) { albedoTexture = texture; }
+	void SetNormalMapTexture(TextureDetails texture) { normalMapTexture = texture; }
+	void SetRoughnessTexture(TextureDetails texture) { roughnessTexture = texture; }
+	void SetMetalnessTexture(TextureDetails texture) { metalnessTexture = texture; }
 
 private:
 	// pipeline state - replaces vertex / pixel shaders
@@ -76,8 +77,8 @@ private:
 
 	// Textures
 	// std::unordered_map<std::string, unsigned int> textures; // other textures
-	unsigned int albedoIndex;
-	unsigned int normalMapIndex;
-	unsigned int roughnessIndex;
-	unsigned int metalnessIndex;
+	TextureDetails albedoTexture;
+	TextureDetails normalMapTexture;
+	TextureDetails roughnessTexture;
+	TextureDetails metalnessTexture;
 };
