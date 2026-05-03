@@ -33,6 +33,7 @@ public:
 	// Getters
 	DirectX::XMFLOAT4X4 GetView();
 	DirectX::XMFLOAT4X4 GetProjection();
+	DirectX::XMFLOAT4X4 GetInverseViewProjection();
 	std::shared_ptr<Transform> GetTransform();
 	float GetAspectRatio();
 

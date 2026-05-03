@@ -86,243 +86,142 @@ HRESULT RayTracing::Initialize(
 // --------------------------------------------------------
 void RayTracing::CreateRaytracingRootSignatures()
 {
-	// Don't bother if DXR isn't available
 	if (dxrResourcesInitialized || !dxrAvailable)
 		return;
 
-	// Create a global root signature shared across all raytracing shaders
-	{
-		// Set up the root parameters for the global signature
-		// These need to match the shader(s) we'll be using
-		D3D12_ROOT_PARAMETER rootParams[1] = {};
-		{
-			rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-			rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-			rootParams[0].Constants.Num32BitValues = sizeof(RayTracingDrawData) / sizeof(unsigned int);
-			rootParams[0].Constants.RegisterSpace = 0;
-			rootParams[0].Constants.ShaderRegister = 0;
-		}
+	// --- Root parameters ---
+	D3D12_ROOT_PARAMETER rootParams[1] = {};
 
-		// create basic wrap sampler
-		D3D12_STATIC_SAMPLER_DESC basicSampler = {};
-		basicSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-		basicSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-		basicSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-		basicSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-		basicSampler.MaxLOD = D3D12_FLOAT32_MAX;
-		basicSampler.ShaderRegister = 0;
-		basicSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	rootParams[0].Constants.Num32BitValues =
+		sizeof(RayTracingDrawData) / sizeof(unsigned int);
+	rootParams[0].Constants.RegisterSpace = 0;
+	rootParams[0].Constants.ShaderRegister = 0;
 
-		D3D12_STATIC_SAMPLER_DESC samplers[] = {basicSampler};
+	// --- Static sampler ---
+	D3D12_STATIC_SAMPLER_DESC basicSampler = {};
+	basicSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	basicSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	basicSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	basicSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+	basicSampler.MaxLOD = D3D12_FLOAT32_MAX;
+	basicSampler.ShaderRegister = 0;
+	basicSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-		// Create the global root signature
-		Microsoft::WRL::ComPtr<ID3DBlob> blob;
-		Microsoft::WRL::ComPtr<ID3DBlob> errors;
-		D3D12_ROOT_SIGNATURE_DESC globalRootSigDesc = {};
-		globalRootSigDesc.NumParameters = ARRAYSIZE(rootParams);
-		globalRootSigDesc.pParameters = rootParams;
-		globalRootSigDesc.NumStaticSamplers = ARRAYSIZE(samplers);
-		globalRootSigDesc.pStaticSamplers = samplers;
-		globalRootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
+	D3D12_STATIC_SAMPLER_DESC samplers[] = { basicSampler };
 
-		D3D12SerializeRootSignature(&globalRootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, blob.GetAddressOf(), errors.GetAddressOf());
-		DXRDevice->CreateRootSignature(1, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(GlobalRaytracingRootSig.GetAddressOf()));
-	}
+	// --- Root signature desc ---
+	D3D12_ROOT_SIGNATURE_DESC desc = {};
+	desc.NumParameters = ARRAYSIZE(rootParams);
+	desc.pParameters = rootParams;
+	desc.NumStaticSamplers = ARRAYSIZE(samplers);
+	desc.pStaticSamplers = samplers;
+	desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
+
+	// --- Create ---
+	Microsoft::WRL::ComPtr<ID3DBlob> blob;
+	Microsoft::WRL::ComPtr<ID3DBlob> errors;
+
+	D3D12SerializeRootSignature(
+		&desc,
+		D3D_ROOT_SIGNATURE_VERSION_1,
+		blob.GetAddressOf(),
+		errors.GetAddressOf());
+
+	DXRDevice->CreateRootSignature(
+		1,
+		blob->GetBufferPointer(),
+		blob->GetBufferSize(),
+		IID_PPV_ARGS(GlobalRaytracingRootSig.GetAddressOf()));
 }
-
-
 // --------------------------------------------------------
 // Creates the raytracing pipeline state, which holds
 // information about the shaders, payload, root signatures, etc.
 // --------------------------------------------------------
 void RayTracing::CreateRaytracingPipelineState(std::wstring raytracingShaderLibraryFile)
 {
-	// Don't bother if DXR isn't available
 	if (dxrResourcesInitialized || !dxrAvailable)
 		return;
 
-	// Read the pre-compiled shader library to a blob
 	Microsoft::WRL::ComPtr<ID3DBlob> blob;
 	D3DReadFileToBlob(raytracingShaderLibraryFile.c_str(), blob.GetAddressOf());
 
-	// There are ten subobjects that make up our raytracing pipeline object:
-	// - Ray generation shader
-	// - Miss shader
-	// - Closest hit shader
-	// - Hit group (group of all "hit"-type shaders, which is just "closest hit" for us)
-	// - Payload configuration
-	// - Association of payload to shaders
-	// - Local root signature
-	// - Association of local root sig to shader
-	// - Global root signature
-	// - Overall pipeline config
-	// Note: Be sure to reserve() space when using a vector, since some objects
-	//       need to refer to others by address, and a vector resizing causes
-	//       the underlying array to be recreated (so addresses are invalidated)
 	std::vector<D3D12_STATE_SUBOBJECT> subobjects;
-	subobjects.reserve(11);
+	subobjects.reserve(10);
 
-	// === Ray generation shader ===
-	D3D12_EXPORT_DESC rayGenExportDesc = {};
-	rayGenExportDesc.Name = L"RayGen";
-	rayGenExportDesc.Flags = D3D12_EXPORT_FLAG_NONE;
+	// === RayGen ===
+	D3D12_EXPORT_DESC rayGenExport = { L"RayGen", nullptr, D3D12_EXPORT_FLAG_NONE };
+	D3D12_DXIL_LIBRARY_DESC rayGenLib = { { blob->GetBufferPointer(), blob->GetBufferSize() }, 1, &rayGenExport };
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &rayGenLib });
 
-	D3D12_DXIL_LIBRARY_DESC	rayGenLibDesc = {};
-	rayGenLibDesc.DXILLibrary.BytecodeLength = blob->GetBufferSize();
-	rayGenLibDesc.DXILLibrary.pShaderBytecode = blob->GetBufferPointer();
-	rayGenLibDesc.NumExports = 1;
-	rayGenLibDesc.pExports = &rayGenExportDesc;
+	// === Miss ===
+	D3D12_EXPORT_DESC missExports[2] = {
+		{ L"Miss", nullptr, D3D12_EXPORT_FLAG_NONE },
+		{ L"MissShadow", nullptr, D3D12_EXPORT_FLAG_NONE }
+	};
+	D3D12_DXIL_LIBRARY_DESC missLib = { { blob->GetBufferPointer(), blob->GetBufferSize() }, 2, missExports };
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &missLib });
 
-	D3D12_STATE_SUBOBJECT rayGenSubObj = {};
-	rayGenSubObj.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
-	rayGenSubObj.pDesc = &rayGenLibDesc;
+	// === Closest Hit ===
+	D3D12_EXPORT_DESC hitExports[2] = {
+		{ L"ClosestHit", nullptr, D3D12_EXPORT_FLAG_NONE },
+		{ L"ClosestHitShadow", nullptr, D3D12_EXPORT_FLAG_NONE }
+	};
+	D3D12_DXIL_LIBRARY_DESC hitLib = { { blob->GetBufferPointer(), blob->GetBufferSize() }, 2, hitExports };
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &hitLib });
 
-	subobjects.push_back(rayGenSubObj);
-
-	// === Miss shader ===
-	D3D12_EXPORT_DESC missExportDesc[2] {};
-	missExportDesc[0].Name = L"Miss";
-	missExportDesc[0].Flags = D3D12_EXPORT_FLAG_NONE;
-	missExportDesc[1].Name = L"MissShadow";
-	missExportDesc[1].Flags = D3D12_EXPORT_FLAG_NONE;
-
-	D3D12_DXIL_LIBRARY_DESC	missLibDesc = {};
-	missLibDesc.DXILLibrary.BytecodeLength = blob->GetBufferSize();
-	missLibDesc.DXILLibrary.pShaderBytecode = blob->GetBufferPointer();
-	missLibDesc.NumExports = 2;
-	missLibDesc.pExports = missExportDesc;
-
-	D3D12_STATE_SUBOBJECT missSubObj = {};
-	missSubObj.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
-	missSubObj.pDesc = &missLibDesc;
-
-	subobjects.push_back(missSubObj);
-
-	// === Closest hit shader ===
-	D3D12_EXPORT_DESC closestHitExportDesc[4] = {};
-	closestHitExportDesc[0].Name = L"ClosestHit";
-	closestHitExportDesc[0].Flags = D3D12_EXPORT_FLAG_NONE;
-	closestHitExportDesc[1].Name = L"ClosestHitShadow";
-	closestHitExportDesc[1].Flags = D3D12_EXPORT_FLAG_NONE;
-	closestHitExportDesc[2].Name = L"ClosestHitEmissive";
-	closestHitExportDesc[2].Flags = D3D12_EXPORT_FLAG_NONE;
-	closestHitExportDesc[3].Name = L"ClosestHitDielectric";
-	closestHitExportDesc[3].Flags = D3D12_EXPORT_FLAG_NONE;
-
-	D3D12_DXIL_LIBRARY_DESC	closestHitLibDesc = {};
-	closestHitLibDesc.DXILLibrary.BytecodeLength = blob->GetBufferSize();
-	closestHitLibDesc.DXILLibrary.pShaderBytecode = blob->GetBufferPointer();
-	closestHitLibDesc.NumExports = 4;
-	closestHitLibDesc.pExports = closestHitExportDesc;
-
-	D3D12_STATE_SUBOBJECT closestHitSubObj = {};
-	closestHitSubObj.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
-	closestHitSubObj.pDesc = &closestHitLibDesc;
-
-	subobjects.push_back(closestHitSubObj);
-
-
-	// === Hit group ===
+	// === HitGroup ===
 	D3D12_HIT_GROUP_DESC hitGroupDesc = {};
 	hitGroupDesc.ClosestHitShaderImport = L"ClosestHit";
 	hitGroupDesc.HitGroupExport = L"HitGroup";
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, &hitGroupDesc });
 
-	D3D12_STATE_SUBOBJECT hitGroup = {};
-	hitGroup.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-	hitGroup.pDesc = &hitGroupDesc;
-
-	subobjects.push_back(hitGroup);
-
-	// === Hit group 2 ===
+	// === Shadow HitGroup ===
 	D3D12_HIT_GROUP_DESC hitGroupShadowDesc = {};
 	hitGroupShadowDesc.ClosestHitShaderImport = L"ClosestHitShadow";
 	hitGroupShadowDesc.HitGroupExport = L"HitGroupShadow";
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, &hitGroupShadowDesc });
 
-	D3D12_STATE_SUBOBJECT hitGroupShadow = {};
-	hitGroupShadow.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-	hitGroupShadow.pDesc = &hitGroupShadowDesc;
-	subobjects.push_back(hitGroupShadow);
+	// === Shader Config ===
+	D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
+	shaderConfig.MaxPayloadSizeInBytes = sizeof(DirectX::XMFLOAT3) + sizeof(unsigned int) * 2;
+	shaderConfig.MaxAttributeSizeInBytes = sizeof(DirectX::XMFLOAT2);
 
-	// === Hit group 3 ===
-	D3D12_HIT_GROUP_DESC hitGroupEmissiveDesc = {};
-	hitGroupEmissiveDesc.ClosestHitShaderImport = L"ClosestHitEmissive";
-	hitGroupEmissiveDesc.HitGroupExport = L"HitGroupEmissive";
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, &shaderConfig });
+	D3D12_STATE_SUBOBJECT* shaderConfigPtr = &subobjects.back();
 
-	D3D12_STATE_SUBOBJECT hitGroupEmissive = {};
-	hitGroupEmissive.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-	hitGroupEmissive.pDesc = &hitGroupEmissiveDesc;
-
-	subobjects.push_back(hitGroupEmissive);
-
-	// === Hit group 4 ===
-	D3D12_HIT_GROUP_DESC hitGroupDielectricDesc = {};
-	hitGroupDielectricDesc.ClosestHitShaderImport = L"ClosestHitDielectric";
-	hitGroupDielectricDesc.HitGroupExport = L"HitGroupDielectric";
-
-	D3D12_STATE_SUBOBJECT hitGroupDielectric = {};
-	hitGroupDielectric.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-	hitGroupDielectric.pDesc = &hitGroupDielectricDesc;
-
-	subobjects.push_back(hitGroupDielectric);
-
-	// === Shader config (payload) ===
-	D3D12_RAYTRACING_SHADER_CONFIG shaderConfigDesc = {};
-	shaderConfigDesc.MaxPayloadSizeInBytes = sizeof(DirectX::XMFLOAT3) + sizeof(unsigned int) * 2; // pass color(float3), raysPerPixel, rayPerPixelIndex
-	shaderConfigDesc.MaxAttributeSizeInBytes = sizeof(DirectX::XMFLOAT2); // Assuming a float2 for barycentric coords for now
-
-	D3D12_STATE_SUBOBJECT shaderConfigSubObj = {};
-	shaderConfigSubObj.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
-	shaderConfigSubObj.pDesc = &shaderConfigDesc;
-
-	subobjects.push_back(shaderConfigSubObj);
-
-	// === Association - Payload and shaders ===
-	// Names of shaders that use the payload
-	const wchar_t* payloadShaderNames[] = { 
-		L"RayGen", 
+	// === Association ===
+	const wchar_t* shaderNames[] = {
+		L"RayGen",
 		L"Miss", L"MissShadow",
-		L"HitGroup", L"HitGroupShadow",L"HitGroupEmissive", L"HitGroupDielectric"};
+		L"HitGroup", L"HitGroupShadow"
+	};
 
-	D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION shaderPayloadAssociation = {};
-	shaderPayloadAssociation.NumExports = ARRAYSIZE(payloadShaderNames);
-	shaderPayloadAssociation.pExports = payloadShaderNames;
-	shaderPayloadAssociation.pSubobjectToAssociate = &subobjects[7]; // Payload config above!
+	D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION assoc = {};
+	assoc.NumExports = _countof(shaderNames);
+	assoc.pExports = shaderNames;
+	assoc.pSubobjectToAssociate = shaderConfigPtr;
 
-	D3D12_STATE_SUBOBJECT shaderPayloadAssociationObject = {};
-	shaderPayloadAssociationObject.Type = D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION;
-	shaderPayloadAssociationObject.pDesc = &shaderPayloadAssociation;
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION, &assoc });
 
-	subobjects.push_back(shaderPayloadAssociationObject);
+	// === Global Root Sig ===
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE, GlobalRaytracingRootSig.GetAddressOf() });
 
-	// === Global root sig ===
-	D3D12_STATE_SUBOBJECT globalRootSigSubObj = {};
-	globalRootSigSubObj.Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
-	globalRootSigSubObj.pDesc = GlobalRaytracingRootSig.GetAddressOf();
-
-	subobjects.push_back(globalRootSigSubObj);
-
-	// === Pipeline config ===
-	// Add a state subobject for the ray tracing pipeline config
+	// === Pipeline Config ===
 	D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
-	pipelineConfig.MaxTraceRecursionDepth = D3D12_RAYTRACING_MAX_DECLARABLE_TRACE_RECURSION_DEPTH;
+	pipelineConfig.MaxTraceRecursionDepth = 10;
+	subobjects.push_back({ D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pipelineConfig });
 
-	D3D12_STATE_SUBOBJECT pipelineConfigSubObj = {};
-	pipelineConfigSubObj.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
-	pipelineConfigSubObj.pDesc = &pipelineConfig;
+	// === Create ===
+	D3D12_STATE_OBJECT_DESC desc = {};
+	desc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+	desc.NumSubobjects = (UINT)subobjects.size();
+	desc.pSubobjects = subobjects.data();
 
-	subobjects.push_back(pipelineConfigSubObj);
-
-	// === Finalize state ===
-	D3D12_STATE_OBJECT_DESC raytracingPipelineDesc = {};
-	raytracingPipelineDesc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
-	raytracingPipelineDesc.NumSubobjects = (unsigned int)subobjects.size();
-	raytracingPipelineDesc.pSubobjects = subobjects.data();
-
-	// Create the state and also query it for its properties
-	HRESULT hr = DXRDevice->CreateStateObject(&raytracingPipelineDesc, IID_PPV_ARGS(RaytracingPipelineStateObject.GetAddressOf()));
+	DXRDevice->CreateStateObject(&desc, IID_PPV_ARGS(RaytracingPipelineStateObject.GetAddressOf()));
 	RaytracingPipelineStateObject->QueryInterface(IID_PPV_ARGS(&RaytracingPipelineProperties));
 }
-
 
 // --------------------------------------------------------
 // Sets up the shader table, which holds shader identifiers
@@ -332,104 +231,47 @@ void RayTracing::CreateRaytracingPipelineState(std::wstring raytracingShaderLibr
 // --------------------------------------------------------
 void RayTracing::CreateShaderTables()
 {
-	// Don't bother if DXR isn't available
 	if (dxrResourcesInitialized || !dxrAvailable)
 		return;
 
-	// How many of each type of shader?
 	UINT64 rayGenCount = 1;
 	UINT64 missCount = 2;
-	UINT64 hitGroupCount = 3;
+	UINT64 hitGroupCount = 2;
 
-	// Ray Gen Table setup
-	{
-		// Calculate the overall sizes
-		rayGenRecordSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES; // Just the shader ID itself
-		rayGenRecordSize = ALIGN(rayGenRecordSize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT); // Aligned properly
-		rayGenTableSize = rayGenRecordSize * rayGenCount;
+	// === RayGen ===
+	rayGenRecordSize = ALIGN(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
+	rayGenTableSize = rayGenRecordSize * rayGenCount;
 
-		// Create a buffer large enough to hold all shader records
-		RayGenTable = Graphics::CreateBuffer(
-			rayGenTableSize,
-			D3D12_HEAP_TYPE_UPLOAD, 
-			D3D12_RESOURCE_STATE_GENERIC_READ);
+	RayGenTable = Graphics::CreateBuffer(rayGenTableSize, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-		// Map and memcpy the shader ID into the table (assuming just 1 entry)
-		unsigned char* addr = 0;
-		RayGenTable->Map(0, 0, (void**)&addr);
-		memcpy(
-			addr, 
-			RaytracingPipelineProperties->GetShaderIdentifier(L"RayGen"), 
-			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		RayGenTable->Unmap(0, 0);
-	}
+	unsigned char* addr = 0;
+	RayGenTable->Map(0, 0, (void**)&addr);
+	memcpy(addr, RaytracingPipelineProperties->GetShaderIdentifier(L"RayGen"), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+	RayGenTable->Unmap(0, 0);
 
-	// Miss Table setup
-	{
-		// Calculate the overall sizes
-		missRecordSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES; // Just the shader ID itself
-		missRecordSize = ALIGN(missRecordSize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT); // Aligned properly
-		missTableSize = missRecordSize * missCount;
+	// === Miss ===
+	missRecordSize = ALIGN(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
+	missTableSize = missRecordSize * missCount;
 
-		// Create a buffer large enough to hold all shader records
-		MissTable = Graphics::CreateBuffer(
-			missTableSize,
-			D3D12_HEAP_TYPE_UPLOAD,
-			D3D12_RESOURCE_STATE_GENERIC_READ);
+	MissTable = Graphics::CreateBuffer(missTableSize, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-		// Map and memcpy the shader ID into the table (assuming just 1 entry)
-		unsigned char* addr = 0;
-		MissTable->Map(0, 0, (void**)&addr);
-		memcpy(
-			addr,
-			RaytracingPipelineProperties->GetShaderIdentifier(L"Miss"), 
-			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		addr += missRecordSize;
-		memcpy(
-			addr,
-			RaytracingPipelineProperties->GetShaderIdentifier(L"MissShadow"),
-			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		MissTable->Unmap(0, 0);
-	}
+	MissTable->Map(0, 0, (void**)&addr);
+	memcpy(addr, RaytracingPipelineProperties->GetShaderIdentifier(L"Miss"), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+	addr += missRecordSize;
+	memcpy(addr, RaytracingPipelineProperties->GetShaderIdentifier(L"MissShadow"), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+	MissTable->Unmap(0, 0);
 
-	// Hit Group Table
-	{
-		// Calculate the overall size
-		hitGroupRecordSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES; // Shader ID
-		hitGroupRecordSize = ALIGN(hitGroupRecordSize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT); // Aligned properly
-		hitGroupTableSize = hitGroupRecordSize * hitGroupCount;
+	// === HitGroup ===
+	hitGroupRecordSize = ALIGN(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
+	hitGroupTableSize = hitGroupRecordSize * hitGroupCount;
 
-		// Create a buffer large enough to hold all shader records
-		HitGroupTable = Graphics::CreateBuffer(
-			hitGroupTableSize,
-			D3D12_HEAP_TYPE_UPLOAD,
-			D3D12_RESOURCE_STATE_GENERIC_READ);
+	HitGroupTable = Graphics::CreateBuffer(hitGroupTableSize, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-		// Map and memcpy the shader ID into the table (assuming just 1 entry)
-		unsigned char* addr = 0;
-		HitGroupTable->Map(0, 0, (void**)&addr);
-		memcpy(
-			addr, 
-			RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroup"), 
-			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		addr += hitGroupRecordSize;
-		memcpy(
-			addr,
-			RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroupShadow"),
-			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		addr += hitGroupRecordSize;
-		memcpy(
-			addr,
-			RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroupEmissive"),
-			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		addr += hitGroupRecordSize;
-		memcpy(
-			addr,
-			RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroupDielectric"),
-			D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-
-		HitGroupTable->Unmap(0, 0);
-	}
+	HitGroupTable->Map(0, 0, (void**)&addr);
+	memcpy(addr, RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroup"), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+	addr += hitGroupRecordSize;
+	memcpy(addr, RaytracingPipelineProperties->GetShaderIdentifier(L"HitGroupShadow"), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+	HitGroupTable->Unmap(0, 0);
 }
 
 
@@ -819,30 +661,26 @@ void RayTracing::CreateEntityDataBuffer(std::vector<std::shared_ptr<GameEntity>>
 // Performs the actual raytracing work
 // --------------------------------------------------------
 void RayTracing::Raytrace(
-	std::shared_ptr<Camera> camera, Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer,
+	std::shared_ptr<Camera> camera,
 	unsigned int skyboxDescriptorIndex
 )
 {
 	if (!dxrResourcesInitialized || !dxrAvailable)
 		return;
 
-	// Transition the output-related resources to the proper states
-	D3D12_RESOURCE_BARRIER outputBarriers[2] = {};
-	{
-		// Back buffer needs to be COPY DESTINATION (for later)
-		outputBarriers[0].Transition.pResource = currentBackBuffer.Get();
-		outputBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-		outputBarriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-		outputBarriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	// transition output UAV
+	D3D12_RESOURCE_BARRIER rb = {};
+	rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	rb.Transition.pResource = RaytracingOutput.Get();
+	rb.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	rb.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	DXRCommandList->ResourceBarrier(1, &rb);
 
-		// Raytracing output needs to be unordered access for raytracing
-		outputBarriers[1].Transition.pResource = RaytracingOutput.Get();
-		outputBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-		outputBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-		outputBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	// Set pipeline + root sig
+	DXRCommandList->SetPipelineState1(RaytracingPipelineStateObject.Get());
+	DXRCommandList->SetComputeRootSignature(GlobalRaytracingRootSig.Get());
 
-		DXRCommandList->ResourceBarrier(2, outputBarriers);
-	}
 
 	// Grab and fill a constant buffer
 	RayTracingSceneData sceneData = {};
@@ -907,21 +745,8 @@ void RayTracing::Raytrace(
 		DXRCommandList->DispatchRays(&dispatchDesc);
 	}
 
-	// Final copy
-	{
-		// Transition the raytracing output to COPY SOURCE
-		outputBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-		outputBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-		DXRCommandList->ResourceBarrier(1, &outputBarriers[1]);
-
-		// Copy the raytracing output into the back buffer
-		DXRCommandList->CopyResource(currentBackBuffer.Get(), RaytracingOutput.Get());
-
-		// Back buffer back to PRESENT
-		outputBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-		outputBarriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-		DXRCommandList->ResourceBarrier(1, &outputBarriers[0]);
-	}
-
-	// Assuming command list will be executed elsewhere
+	// transition srv
+	rb.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	DXRCommandList->ResourceBarrier(1, &rb);
 }

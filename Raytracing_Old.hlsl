@@ -36,17 +36,6 @@ float FresnelView(float3 n, float3 v, float f0)
     return f0 + (1 - f0) * pow(1 - NdotV, 5);
 }
 
-float3 ReconstructWorldPosition(float2 uv, float depth, float4x4 invVP)
-{
-    float2 ndc = uv * 2.0f - 1.0f;
-    ndc.y = -ndc.y;
-
-    float4 clip = float4(ndc, depth, 1.0f);
-    float4 world = mul(invVP, clip);
-    world.xyz /= world.w;
-    return world.xyz;
-}
-
 // === Structs ===
 
 // Layout of data in the vertex buffer
@@ -116,12 +105,6 @@ cbuffer DrawData : register(b0)
     uint SceneTLASDescriptorIndex;
     uint OutputUAVDescriptorIndex;
     uint SkyboxDescriptorIndex;
-    
-    // GBuffer
-    uint GBufferAlbedoIndex;
-    uint GBufferNormalIndex;
-    uint GBufferMaterialIndex;
-    uint GBufferDepthIndex;
 };
 
 
@@ -262,76 +245,210 @@ float3 RandomCosineWeightedHemisphere(float u0, float u1, float3 unitNormal)
 [shader("raygeneration")]
 void RayGen()
 {
-	// Grab the constant buffer
-    ConstantBuffer<SceneData> cb = ResourceDescriptorHeap[SceneDataConstantBufferIndex];
+    ConstantBuffer<SceneData> cb =
+		ResourceDescriptorHeap[SceneDataConstantBufferIndex];
 	
-	// Get the ray indices
-    uint2 rayIndices = DispatchRaysIndex().xy;
+	// get ray indices
+	uint2 rayIndices = DispatchRaysIndex().xy;
 	
-	// Average of all rays per pixel
+	// average all rays per pixel
     float3 totalColor = float3(0, 0, 0);
 	
     for (int r = 0; r < cb.RaysPerPixel; r++)
     {
-        float2 adjustedIndices = (float2) rayIndices;
-        float ray01 = (float) r / cb.RaysPerPixel;
-        adjustedIndices += rand2(rayIndices.xy * ray01);
-
 		// Calculate the ray from the camera through a particular
 		// pixel of the output buffer using this shader's indices
         RayDesc ray = CalcRayFromCamera(
 			rayIndices,
 			cb.CameraPosition,
-			cb.InverseViewProjection);
+			cb.InverseViewProjection
+		);
 
 		// Set up the payload for the ray
 		// This initializes the struct to all zeros
         RayPayload payload = (RayPayload) 0;
         payload.Color = float3(1, 1, 1);
-        payload.RecursionDepth = 0;
         payload.RayPerPixelIndex = r;
+        payload.RecursionDepth = 0;
 
 		// Perform the ray trace for this ray
-        RaytracingAccelerationStructure SceneTLAS = ResourceDescriptorHeap[SceneTLASDescriptorIndex];
+        RaytracingAccelerationStructure SceneTLAS =
+			ResourceDescriptorHeap[SceneTLASDescriptorIndex];
+	
         TraceRay(
 			SceneTLAS,
 			RAY_FLAG_NONE,
-			0xFF,
-			0, 0, 0,
-			ray,
-			payload);
+			0xFF, 0, 0, 0, // mask and offsets
+			ray, payload
+		);
 		
         totalColor += payload.Color;
     }
 
-	// Set the final color of the buffer (gamma corrected)
-    RWTexture2D<float4> OutputColor = ResourceDescriptorHeap[OutputUAVDescriptorIndex];
-    OutputColor[rayIndices] = float4(pow(totalColor / cb.RaysPerPixel, 1.0f / 2.2f), 1);
+	// Set the final color of the buffer
+    RWTexture2D<float4> OutputColor =
+		ResourceDescriptorHeap[OutputUAVDescriptorIndex];
+	
+	// gamma corrected final color
+    // OutputColor[rayIndices] = float4(pow(totalColor / cb.RaysPerPixel, 1.0f / 2.2f), 1);
+    OutputColor[rayIndices] = float4(totalColor / cb.RaysPerPixel, 1);
 }
 
 
 // Miss shader - What happens if the ray doesn't hit anything?
 [shader("miss")]
 void Miss(inout RayPayload payload)
-{
-	// Hit the skybox, alter by the sky color
+{		
+    if (SkyboxDescriptorIndex == -1)
+    {
+        payload.Color *= float3(0.3f, 0.8f, 0.5f);
+        return;
+    }
+    
     TextureCube sky = ResourceDescriptorHeap[SkyboxDescriptorIndex];
     payload.Color *= sky.SampleLevel(BasicSampler, WorldRayDirection(), 0).rgb;
 }
 
+// shadowRay miss shader
+[shader("miss")]
+void MissShadow(inout ShadowPayload payload)
+{
+    payload.Hit = false;
+}
+
+
+// shadow hit shader
+[shader("closesthit")]
+void ClosestHitShadow(inout ShadowPayload payload, BuiltInTriangleIntersectionAttributes hitAttributes)
+{
+    payload.Hit = true;
+}
+
+// emissive hit shader
+[shader("closesthit")]
+void ClosestHitEmissive(inout RayPayload payload, BuiltInTriangleIntersectionAttributes hitAttributes)
+{
+    // entity data
+    StructuredBuffer<EntityData> entityDataBuffer = ResourceDescriptorHeap[EntityDataDescriptorIndex];
+    EntityData thisEntity = entityDataBuffer[InstanceIndex()];
+    
+    payload.Color *= thisEntity.Color.rgb * thisEntity.Emissive;
+}
+
+[shader("closesthit")]
+void ClosestHitDielectric(inout RayPayload payload, BuiltInTriangleIntersectionAttributes hitAttributes)
+{
+    if (payload.RecursionDepth == 10)
+    {
+        payload.Color = float3(0, 0, 0);
+        return;
+    }
+
+    // Scene and entity
+    RaytracingAccelerationStructure SceneTLAS = ResourceDescriptorHeap[SceneTLASDescriptorIndex];
+    StructuredBuffer<EntityData> entityDataBuffer = ResourceDescriptorHeap[EntityDataDescriptorIndex];
+    EntityData thisEntity = entityDataBuffer[InstanceIndex()];
+
+    // Interpolate vertex
+    Vertex hit = InterpolateVertices(PrimitiveIndex(), hitAttributes.barycentrics);
+
+    // World space normal/tangent
+    float3 normal_WS = normalize(mul(hit.normal, (float3x3) ObjectToWorld4x3()));
+    float3 tangent_WS = normalize(mul(hit.tangent, (float3x3) ObjectToWorld4x3()));
+
+    // UVs
+    float2 uv = hit.uv * thisEntity.UvScale + thisEntity.UvOffset;
+
+    // Normal map
+    if (thisEntity.NormalMapIndex != -1)
+    {
+        Texture2D NormalMap = ResourceDescriptorHeap[thisEntity.NormalMapIndex];
+        normal_WS = NormalMapping(NormalMap, BasicSampler, uv, normal_WS, tangent_WS);
+    }
+
+    // ray direction
+    float3 V = -WorldRayDirection();
+    float3 normal = normal_WS;
+    float n1 = 1.0f;
+    float n2 = thisEntity.IOR;
+    bool entering = dot(V, normal) > 0;
+    if (!entering)
+    {
+        normal = -normal;
+        float tmp = n1;
+        n1 = n2;
+        n2 = tmp;
+    }
+    float eta = n1 / n2;
+
+    // fresnel schlick
+    float cosTheta = saturate(dot(-V, normal));
+    float sinTheta = sqrt(1.0f - cosTheta * cosTheta);
+    bool cannotRefract = eta * sinTheta > 1.0f;
+
+    float3 refractedDir = refract(-V, normal, eta);
+    float3 reflectedDir = reflect(-V, normal);
+
+    // roughness
+    float roughness = thisEntity.Roughness;
+    if (thisEntity.RoughnessIndex != -1)
+    {
+        Texture2D Roughness = ResourceDescriptorHeap[thisEntity.RoughnessIndex];
+        roughness = pow(Roughness.SampleLevel(BasicSampler, uv, 0).r, 2);
+    }
+
+    // randomize directions based on roughness
+    float2 pixelUV = (float2) DispatchRaysIndex().xy / DispatchRaysDimensions().xy;
+    float2 rng = rand2(pixelUV * (payload.RecursionDepth + 1) + payload.RayPerPixelIndex + RayTCurrent());
+
+    float3 finalReflected = normalize(lerp(reflectedDir, RandomCosineWeightedHemisphere(rng.x, rng.y, reflectedDir), roughness));
+    float3 finalRefracted = normalize(lerp(refractedDir, RandomCosineWeightedHemisphere(rng.y, rng.x, refractedDir), roughness));
+
+    // Transparency alpha
+    float alpha = thisEntity.Alpha;
+    float3 finalDir = cannotRefract ? finalReflected : normalize(finalRefracted);
+
+    // Albedo map
+    float3 surfaceColor = float3(1, 1, 1);
+    if (thisEntity.AlbedoIndex != -1)
+    {
+        Texture2D Albedo = ResourceDescriptorHeap[thisEntity.AlbedoIndex];
+        surfaceColor = Albedo.SampleLevel(BasicSampler, uv, 0).rgb;
+    }
+
+    // Blend color by alpha
+    payload.Color *= surfaceColor;
+
+    // Trace next ray
+    RayDesc ray;
+    ray.Origin = WorldRayOrigin() + finalDir * 0.001f;
+    ray.Direction = normalize(finalDir);
+    ray.TMin = 0.0001f;
+    ray.TMax = 1000.0f;
+
+    payload.RecursionDepth++;
+    TraceRay(
+        SceneTLAS, RAY_FLAG_NONE, 
+        0xFF, 0, 0, 0, 
+        ray, payload
+    );
+}
 
 // Closest hit shader - Runs the first time a ray hits anything
 [shader("closesthit")]
 void ClosestHit(inout RayPayload payload, BuiltInTriangleIntersectionAttributes hitAttributes)
 {
-	// If we've reached the max recursion, we haven't hit a light source (the sky, which is the "miss shader" here)
-    if (payload.RecursionDepth == 2)
+	// max recursion without hitting light / sky
+    if (payload.RecursionDepth == 10)
     {
         payload.Color = float3(0, 0, 0);
         return;
     }
+    
+    // scene data
+    RaytracingAccelerationStructure SceneTLAS = ResourceDescriptorHeap[SceneTLASDescriptorIndex];
 	
-	// Get the data for this entity
+	// entity data
     StructuredBuffer<EntityData> entityDataBuffer = ResourceDescriptorHeap[EntityDataDescriptorIndex];
     EntityData thisEntity = entityDataBuffer[InstanceIndex()];
 	
@@ -339,32 +456,61 @@ void ClosestHit(inout RayPayload payload, BuiltInTriangleIntersectionAttributes 
     Vertex hit = InterpolateVertices(PrimitiveIndex(), hitAttributes.barycentrics);
     float3 normal_WS = normalize(mul(hit.normal, (float3x3) ObjectToWorld4x3()));
     float3 tangent_WS = normalize(mul(hit.tangent, (float3x3) ObjectToWorld4x3()));
+    float3 worldPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    
+    // trace shadow ray
+    float3 directionToSun = normalize(float3(0, 1, 0));
+    float diffuse = dot(normal_WS, directionToSun);
+    if (diffuse > 0)
+    {
+        RayDesc shadowRay;
+        shadowRay.Direction = directionToSun;
+        shadowRay.Origin = worldPos + normal_WS * 0.01f;
+        shadowRay.TMin = 0.001f;
+        shadowRay.TMax = 1000.0f;
+	
+        ShadowPayload shadowPayload;
+        shadowPayload.Hit = false;
+	
+        TraceRay(
+			SceneTLAS,
+			RAY_FLAG_NONE,
+			0xFF,
+			1, // contribute to hitgroup 1
+			0,
+			1, // use miss shader 1
+			shadowRay,
+			shadowPayload);
+		
+        payload.Color += shadowPayload.Hit ? 0 : diffuse;
+    }
 
 	// Basic surface color
     float metalness = thisEntity.Metalness;
-    float roughness = saturate(pow(thisEntity.Roughness, 2)); // Squared remap
+    float roughness = saturate(pow(thisEntity.Roughness, 2));
     float3 surfaceColor = thisEntity.Color.rgb;
 	
-	// Texture?
+    float2 uv = hit.uv * thisEntity.UvScale + thisEntity.UvOffset;
+    
     if (thisEntity.AlbedoIndex != -1)
     {
         Texture2D Albedo = ResourceDescriptorHeap[thisEntity.AlbedoIndex];
-        surfaceColor = pow(Albedo.SampleLevel(BasicSampler, hit.uv, 0).rgb, 2.2f);
+        surfaceColor = pow(Albedo.SampleLevel(BasicSampler, uv, 0).rgb, 2.2f);
     }
     if (thisEntity.NormalMapIndex != -1)
     {
         Texture2D NormalMap = ResourceDescriptorHeap[thisEntity.NormalMapIndex];
-        normal_WS = NormalMapping(NormalMap, BasicSampler, hit.uv, normal_WS, tangent_WS);
+        normal_WS = NormalMapping(NormalMap, BasicSampler, uv, normal_WS, tangent_WS);
     }
     if (thisEntity.RoughnessIndex != -1)
     {
         Texture2D Roughness = ResourceDescriptorHeap[thisEntity.RoughnessIndex];
-        roughness = pow(Roughness.SampleLevel(BasicSampler, hit.uv, 0).r, 2);
+        roughness = pow(Roughness.SampleLevel(BasicSampler, uv, 0).r, 2); 
     }
     if (thisEntity.MetalnessIndex != -1)
     {
         Texture2D Metalness = ResourceDescriptorHeap[thisEntity.MetalnessIndex];
-        metalness = Metalness.SampleLevel(BasicSampler, hit.uv, 0).r;
+        metalness = Metalness.SampleLevel(BasicSampler, uv, 0).r;
     }
 	
 	// Calc a unique RNG value for this ray, based on the "uv" (0-1 location) of this pixel and other per-ray data
@@ -401,26 +547,11 @@ void ClosestHit(inout RayPayload payload, BuiltInTriangleIntersectionAttributes 
 	
 	// Recursive ray trace
     payload.RecursionDepth++;
-    RaytracingAccelerationStructure SceneTLAS = ResourceDescriptorHeap[SceneTLASDescriptorIndex];
     TraceRay(
 		SceneTLAS,
 		RAY_FLAG_NONE,
-		0xFF, 0, 0, 0, // Mask and offsets
+		0xFF, 0, 0, 0, // mask and offsets
 		ray,
-		payload);
-}
-
-// shadowRay miss shader
-[shader("miss")]
-void MissShadow(inout ShadowPayload payload)
-{
-    payload.Hit = false;
-}
-
-
-// shadow hit shader
-[shader("closesthit")]
-void ClosestHitShadow(inout ShadowPayload payload, BuiltInTriangleIntersectionAttributes hitAttributes)
-{
-    payload.Hit = true;
+		payload
+    );
 }

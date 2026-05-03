@@ -10,12 +10,6 @@ cbuffer BindlessData : register(b0)
     uint psPerObjectCBIndex;
 }
 
-struct PSPerFrameData
-{
-    float3 cameraPosition;
-    float pad;
-};
-
 struct PSPerObjectData
 {
     // constants
@@ -70,7 +64,6 @@ SamplerState BasicSampler : register(s0);
 PS_Output main(VertexToPixel input) : SV_TARGET
 {
     // get data from heap
-    ConstantBuffer<PSPerFrameData> cbFrame = ResourceDescriptorHeap[psPerFrameCBIndex];
     ConstantBuffer<PSPerObjectData> cbObject = ResourceDescriptorHeap[psPerObjectCBIndex];
     
     Texture2D NormalMap = ResourceDescriptorHeap[cbObject.normalMapIndex];

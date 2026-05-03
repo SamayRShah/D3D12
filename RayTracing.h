@@ -56,12 +56,13 @@ namespace RayTracing
 		unsigned int outputWidth,
 		unsigned int outputHeight,
 		std::wstring raytracingShaderLibraryFile);
+
 	void ResizeOutputUAV(
 		unsigned int outputWidth,
 		unsigned int outputHeight);
+
 	void Raytrace(
 		std::shared_ptr<Camera> camera, 
-		Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer,
 		unsigned int skyboxDescriptorIndex = -1);
 
 	// Helpers for creating acceleration structures

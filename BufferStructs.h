@@ -3,7 +3,40 @@
 
 #include "Lights.h"
 
+// === SDF ===
+struct SDFPassData 
+{
+	DirectX::XMFLOAT4X4 inverseViewProjection;
+	DirectX::XMFLOAT3 cameraPosition;
+
+	int screenWidth;
+	int screenHeight;
+
+	float totalTime;
+};
+
+
 // === Rasterization ===
+
+struct LightingIndices
+{
+	unsigned int psPerFrameCBIndex;
+	unsigned int GBufferAlbedoIndex;
+	unsigned int GBufferNormalIndex;
+	unsigned int GBufferMaterialIndex;
+	unsigned int GBufferDepthIndex;
+};
+
+struct CompositeIndices
+{
+	// GBuffer
+	unsigned int GBufferAlbedoIndex;
+	unsigned int GBufferNormalIndex;
+	unsigned int GBufferMaterialIndex;
+	unsigned int GBufferDepthIndex;
+	unsigned int LightingIndex;
+	unsigned int SDFIndex;
+};
 
 struct SkyDrawIndices
 {
@@ -35,6 +68,7 @@ struct VertexShaderPerObjectData
 
 struct PixelShaderPerFrameData
 {
+	DirectX::XMFLOAT4X4 inverseViewProjection;
 	DirectX::XMFLOAT3 cameraPosition;
 	int lightCount;
 	Light lights[MAX_LIGHTS];
@@ -68,6 +102,12 @@ struct RayTracingDrawData
 	unsigned int SceneTLASDescriptorIndex;
 	unsigned int OutputUAVDescriptorIndex;
 	unsigned int SkyboxDescriptorIndex;
+
+	// GBuffer
+	unsigned int GBufferAlbedoIndex;
+	unsigned int GBufferNormalIndex;
+	unsigned int GBufferMaterialIndex;
+	unsigned int GBufferDepthIndex;
 };
 
 // overall scene data 

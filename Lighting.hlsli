@@ -63,6 +63,17 @@ float Attenuate(Light light, float3 worldPos)
     return att * att;
 }
 
+float3 ReconstructPosition(float2 uv, float depth, float4x4 invViewProj)
+{
+    float4 ndc;
+    ndc.xy = uv * 2.0f - 1.0f;
+    ndc.z = depth;
+    ndc.w = 1.0f;
+
+    float4 worldPos = mul(ndc, invViewProj);
+    worldPos /= worldPos.w;
+    return worldPos.xyz;
+}
 
 
 // === BASIC LIGHTING ===============================================

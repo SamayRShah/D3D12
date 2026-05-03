@@ -1,9 +1,11 @@
 cbuffer DrawData : register(b0)
 {
     uint albedoIndex;
-    //uint normalIndex;
-    //uint materialIndex;
-    //uint depthIndex;
+    uint normalIndex;
+    uint materialIndex;
+    uint depthIndex;
+    uint lightingIndex;
+    uint sdfIndex;
 }
 
 // Defines the input to this pixel shader
@@ -19,15 +21,27 @@ SamplerState BasicSampler : register(s0);
 // Entry point for this pixel shader
 float4 main(VertexToPixel input) : SV_TARGET
 {
-    Texture2D<float4> albedoTex = ResourceDescriptorHeap[albedoIndex];
-    // exture2D<float4> normalTex = ResourceDescriptorHeap[normalIndex];
-    // exture2D<float4> materialTex = ResourceDescriptorHeap[materialIndex];
-    // exture2D<float> depthTex = ResourceDescriptorHeap[depthIndex];
+    // Sample G-buffer textures
+    Texture2D albedoTex = ResourceDescriptorHeap[albedoIndex];
+    Texture2D normalTex = ResourceDescriptorHeap[normalIndex];
+    Texture2D materialTex = ResourceDescriptorHeap[materialIndex];
+    Texture2D depthTex = ResourceDescriptorHeap[depthIndex];
+    Texture2D lightingTex = ResourceDescriptorHeap[lightingIndex];
+    Texture2D sdfTexture = ResourceDescriptorHeap[sdfIndex];
     
-    float2 uv = input.uv;
+    float4 sdf = sdfTexture.SampleLevel(BasicSampler, input.uv, 0);
+    float4 albedo = albedoTex.SampleLevel(BasicSampler, input.uv, 0);
+    float4 normal = normalTex.SampleLevel(BasicSampler, input.uv, 0);
+    float4 material = materialTex.SampleLevel(BasicSampler, input.uv, 0);
+    float depth = depthTex.SampleLevel(BasicSampler, input.uv, 0).r;
+    float4 lighting = lightingTex.SampleLevel(BasicSampler, input.uv, 0);
 
-    float3 albedo = albedoTex.Sample(BasicSampler, uv).rgb;
-    // float roughness = materialTex.Sample(BasicSampler, uv).g;
+    // Determine if this pixel is sky (far plane)
+    bool isSky = depth >= 1.0f;
 
-    return float4(albedo.rgb, 1);
+    // combine lighting with albedo
+    float3 finalColor = isSky ? albedo.rgb : albedo.rgb * lighting.rgb;
+    finalColor += sdf.rgb;
+
+    return float4(finalColor, 1.0f);
 }

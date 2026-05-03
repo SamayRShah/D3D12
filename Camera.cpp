@@ -83,6 +83,17 @@ void Camera::UpdateProjectionMatrix(float aspectRatio)
 
 DirectX::XMFLOAT4X4 Camera::GetView() { return viewMatrix; }
 DirectX::XMFLOAT4X4 Camera::GetProjection() { return projMatrix; }
+
+DirectX::XMFLOAT4X4 Camera::GetInverseViewProjection()
+{
+	DirectX::XMFLOAT4X4 res;
+	DirectX::XMMATRIX v = DirectX::XMLoadFloat4x4(&viewMatrix);
+	DirectX::XMMATRIX p = DirectX::XMLoadFloat4x4(&projMatrix);
+	DirectX::XMMATRIX vp = DirectX::XMMatrixMultiply(v, p);
+	DirectX::XMStoreFloat4x4(&res, XMMatrixInverse(0, vp));
+	return res;
+}
+
 std::shared_ptr<Transform> Camera::GetTransform() { return transform; }
 
 float Camera::GetAspectRatio() { return aspectRatio; }

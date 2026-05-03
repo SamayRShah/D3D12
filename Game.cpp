@@ -22,6 +22,8 @@
 // For the DirectX Math library
 using namespace DirectX;
 
+#define ROOT_PARAM_INPUTS 8
+
 // random range helper macro
 #define RandomRange(min, max) (float)rand() / RAND_MAX * (max - min) + min
 
@@ -120,19 +122,22 @@ void Game::CreateRootSigAndPipelineState()
 	// load shaders
 	Microsoft::WRL::ComPtr<ID3DBlob> vsByteCode;
 	Microsoft::WRL::ComPtr<ID3DBlob> psByteCode;
-
 	Microsoft::WRL::ComPtr<ID3DBlob> fullscreenVS;
 	Microsoft::WRL::ComPtr<ID3DBlob> rasterPS;
 	Microsoft::WRL::ComPtr<ID3DBlob> compositePS;
+	Microsoft::WRL::ComPtr<ID3DBlob> lightingPS;
+	Microsoft::WRL::ComPtr<ID3DBlob> sdfPS;
 
 	// load shaders
 	{
 		D3DReadFileToBlob(FixPath(L"VS_PBR.cso").c_str(), vsByteCode.GetAddressOf());
 		D3DReadFileToBlob(FixPath(L"PS_PBR.cso").c_str(), psByteCode.GetAddressOf());
-
 		D3DReadFileToBlob(FixPath(L"VS_FullScreen.cso").c_str(), fullscreenVS.GetAddressOf());
+
 		D3DReadFileToBlob(FixPath(L"PS_Raster.cso").c_str(), rasterPS.GetAddressOf());
 		D3DReadFileToBlob(FixPath(L"PS_Composite.cso").c_str(), compositePS.GetAddressOf());
+		D3DReadFileToBlob(FixPath(L"PS_Lighting.cso").c_str(), lightingPS.GetAddressOf());
+		D3DReadFileToBlob(FixPath(L"PS_SDF.cso").c_str(), sdfPS.GetAddressOf());
 	}
 
 	// root signature
@@ -142,7 +147,7 @@ void Game::CreateRootSigAndPipelineState()
 		// root params
 		rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 		rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-		rootParams[0].Constants.Num32BitValues = sizeof(DrawDescriptorIndices) / sizeof(unsigned int);
+		rootParams[0].Constants.Num32BitValues = ROOT_PARAM_INPUTS;
 		rootParams[0].Constants.RegisterSpace = 0;
 		rootParams[0].Constants.ShaderRegister = 0;
 
@@ -244,6 +249,9 @@ void Game::CreateRootSigAndPipelineState()
 		// Also create the "full screen texture" PSO
 		// - Assuming the same root sig is compatible
 
+		// Disable depth testing for full-screen passes so they don't fail against the scene depth
+		psoDesc.DepthStencilState.DepthEnable = false;
+
 		psoDesc.PS.BytecodeLength = compositePS->GetBufferSize();
 		psoDesc.PS.pShaderBytecode = compositePS->GetBufferPointer();
 
@@ -255,6 +263,32 @@ void Game::CreateRootSigAndPipelineState()
 		psoDesc.RTVFormats[2] = DXGI_FORMAT_UNKNOWN;
 		psoDesc.RTVFormats[3] = DXGI_FORMAT_UNKNOWN;
 		Graphics::Device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(fullScreenTexturePSO.GetAddressOf()));
+
+		psoDesc.PS.BytecodeLength = lightingPS->GetBufferSize();
+		psoDesc.PS.pShaderBytecode = lightingPS->GetBufferPointer();
+
+		psoDesc.VS.BytecodeLength = fullscreenVS->GetBufferSize();
+		psoDesc.VS.pShaderBytecode = fullscreenVS->GetBufferPointer();
+
+		psoDesc.NumRenderTargets = 1;
+		psoDesc.RTVFormats[1] = DXGI_FORMAT_UNKNOWN; // Means "not used" here
+		psoDesc.RTVFormats[2] = DXGI_FORMAT_UNKNOWN;
+		psoDesc.RTVFormats[3] = DXGI_FORMAT_UNKNOWN;
+		Graphics::Device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(lightingPSO.GetAddressOf()));
+
+		psoDesc.PS.BytecodeLength = sdfPS->GetBufferSize();
+		psoDesc.PS.pShaderBytecode = sdfPS->GetBufferPointer();
+
+		psoDesc.VS.BytecodeLength = fullscreenVS->GetBufferSize();
+		psoDesc.VS.pShaderBytecode = fullscreenVS->GetBufferPointer();
+
+		psoDesc.NumRenderTargets = 1;
+		psoDesc.RTVFormats[1] = DXGI_FORMAT_UNKNOWN; // Means "not used" here
+		psoDesc.RTVFormats[2] = DXGI_FORMAT_UNKNOWN;
+		psoDesc.RTVFormats[3] = DXGI_FORMAT_UNKNOWN;
+
+		// Create the SDF PSO
+		Graphics::Device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(sdfPSO.GetAddressOf()));
 	}
 
 	// Set up the viewport and scissor rectangle
@@ -295,9 +329,11 @@ void Game::CreateRootSigAndPipelineState()
 	RenderTargets[GBUFFER_NORMALS] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
 	RenderTargets[GBUFFER_MATERIAL] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
 	RenderTargets[GBUFFER_DEPTH] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, DXGI_FORMAT_R32_FLOAT, 1, 0, 0, 0);
+	RenderTargets[LIGHT_BUFFER] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+	RenderTargets[SDF] = Graphics::CreateTexture(Window::Width(), Window::Height(), 1, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
 
 	// Update the texture details to point to contiguous spots in the RTV heap
-	for (unsigned int i = 0; i < 4; i++)
+	for (unsigned int i = 0; i < 6; i++)
 	{
 		RenderTargets[i].RTV = rtv_cpu_start;
 		RenderTargets[i].RTV.ptr += descSize * i;
@@ -313,6 +349,8 @@ void Game::CreateRootSigAndPipelineState()
 	Graphics::Device->CreateRenderTargetView(RenderTargets[GBUFFER_ALBEDO].Texture.Get(), &rtvDesc, RenderTargets[GBUFFER_ALBEDO].RTV);
 	Graphics::Device->CreateRenderTargetView(RenderTargets[GBUFFER_NORMALS].Texture.Get(), &rtvDesc, RenderTargets[GBUFFER_NORMALS].RTV);
 	Graphics::Device->CreateRenderTargetView(RenderTargets[GBUFFER_MATERIAL].Texture.Get(), &rtvDesc, RenderTargets[GBUFFER_MATERIAL].RTV);
+	Graphics::Device->CreateRenderTargetView(RenderTargets[LIGHT_BUFFER].Texture.Get(), &rtvDesc, RenderTargets[LIGHT_BUFFER].RTV);
+	Graphics::Device->CreateRenderTargetView(RenderTargets[SDF].Texture.Get(), &rtvDesc, RenderTargets[SDF].RTV);
 
 	// Depth needs different format
 	rtvDesc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -327,20 +365,22 @@ void Game::CreateRootSigAndPipelineState()
 	srv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 	// Reserve 4 SRVs
-	for (unsigned int i = 0; i < 4; i++)
+	for (unsigned int i = 0; i < 6; i++)
 		Graphics::ReserveDescriptorHeapSlot(&RenderTargets[i].SRV.CPUHandle, &RenderTargets[i].SRV.GPUHandle);
 
 	// Create
 	Graphics::Device->CreateShaderResourceView(RenderTargets[GBUFFER_ALBEDO].Texture.Get(), &srv, RenderTargets[GBUFFER_ALBEDO].SRV.CPUHandle);
 	Graphics::Device->CreateShaderResourceView(RenderTargets[GBUFFER_NORMALS].Texture.Get(), &srv, RenderTargets[GBUFFER_NORMALS].SRV.CPUHandle);
 	Graphics::Device->CreateShaderResourceView(RenderTargets[GBUFFER_MATERIAL].Texture.Get(), &srv, RenderTargets[GBUFFER_MATERIAL].SRV.CPUHandle);
+	Graphics::Device->CreateShaderResourceView(RenderTargets[LIGHT_BUFFER].Texture.Get(), &srv, RenderTargets[LIGHT_BUFFER].SRV.CPUHandle);
+	Graphics::Device->CreateShaderResourceView(RenderTargets[SDF].Texture.Get(), &srv, RenderTargets[SDF].SRV.CPUHandle);
 
 	// Depth has different format
 	srv.Format = DXGI_FORMAT_R32_FLOAT;
 	Graphics::Device->CreateShaderResourceView(RenderTargets[GBUFFER_DEPTH].Texture.Get(), &srv, RenderTargets[GBUFFER_DEPTH].SRV.CPUHandle);
 
 	// Update SRV indices
-	for (unsigned int i = 0; i < 4; i++)
+	for (unsigned int i = 0; i < 6; i++)
 		RenderTargets[i].SRV.GPUDescriptorIndex = Graphics::GetDescriptorIndex(RenderTargets[i].SRV.GPUHandle);
 }
 
@@ -370,8 +410,8 @@ void Game::CreateEntities()
 	// create materials
 	auto floorMat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.2f, 0.15f));
 	floorMat->SetTint(XMFLOAT3(0.6f, 0.6f, 0.9f));
-	floorMat->SetRoughness(0.5f);
-	floorMat->SetMetalness(0.5f);
+	floorMat->SetRoughness(0.2f);
+	floorMat->SetMetalness(0);
 
 	auto mandoMat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.6f, 0.5f));
 	mandoMat->SetAlbedoTexture(Graphics::LoadTexture(ASSET(L"Textures/mando.png")));
@@ -384,7 +424,7 @@ void Game::CreateEntities()
 
 	auto crateMat = std::make_shared<Material>(pipelineState);
 	crateMat->SetPBR(LOAD_PBR_ASSET(L"crate_wood"));
-	
+
 	// Floor
 	auto floor = std::make_shared<GameEntity>(cubeMesh, floorMat);
 	floor->GetTransform()->SetScale(50);
@@ -402,22 +442,6 @@ void Game::CreateEntities()
 		mat->SetRoughness(RandomRange(0.0f, 1.0f) * RandomRange(0.0f, 1.0f));
 		mat->SetMetalness(RandomRange(0.0f, 1.0f) * RandomRange(0.0f, 1.0f));
 		float scale = RandomRange(0.25f, 0.6f);
-	
-		auto newEnt = std::make_shared<GameEntity>(meshes[(size_t)(RandomRange(0, meshes.size()))], mat);
-		newEnt->GetTransform()->SetScale(scale);
-		newEnt->GetTransform()->SetPosition(
-			RandomRange(-9, 9),
-			-1 + scale,
-			RandomRange(-9, 9));
-	
-		entities.push_back(newEnt);
-	}
-	for (int i = 0; i < 8; i++)
-	{
-		auto mat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.8f, 0.4f));
-		mat->SetMetalness(RandomRange(0.0f, 1.0f) * RandomRange(0.0f, 1.0f));
-		mat->SetAlpha(0);
-		float scale = RandomRange(0.25f, 0.6f);
 
 		auto newEnt = std::make_shared<GameEntity>(meshes[(size_t)(RandomRange(0, meshes.size()))], mat);
 		newEnt->GetTransform()->SetScale(scale);
@@ -428,40 +452,6 @@ void Game::CreateEntities()
 
 		entities.push_back(newEnt);
 	}
-	for (int i = 0; i < 8; i++)
-	{
-		auto mat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.8f, 0.4f));
-		mat->SetRoughness(RandomRange(0.0f, 1.0f) * RandomRange(0.0f, 1.0f));
-		mat->SetEmissive(RandomRange(1.0f, 5.0f));
-
-		float scale = RandomRange(0.25f, 0.6f);
-		auto newEnt = std::make_shared<GameEntity>(meshes[(size_t)(RandomRange(0, meshes.size()))], mat);
-		newEnt->GetTransform()->SetScale(scale);
-		newEnt->GetTransform()->SetPosition(
-			RandomRange(-9, 9),
-			-1 + scale,
-			RandomRange(-9, 9));
-
-		entities.push_back(newEnt);
-	}
-
-	for (int i = 0; i < 8; i++)
-	{
-		auto mat = std::make_shared<Material>(pipelineState, Utils::HSLColor(-1, 0.8f, 0.4f));
-		mat->SetRoughness(RandomRange(0.0f, 1.0f) * RandomRange(0.0f, 1.0f));
-		mat->SetEmissive(RandomRange(1.0f, 5.0f));
-
-		float scale = RandomRange(0.25f, 0.6f);
-		auto newEnt = std::make_shared<GameEntity>(meshes[(size_t)(RandomRange(0, meshes.size()))], mat);
-		newEnt->GetTransform()->SetScale(scale);
-		newEnt->GetTransform()->SetPosition(
-			RandomRange(-9, 9),
-			-1 + scale,
-			RandomRange(-9, 9));
-
-		entities.push_back(newEnt);
-	}
-
 	for (int i = 0; i < 8; i++)
 	{
 		float scale = RandomRange(0.25f, 0.6f);
@@ -501,30 +491,30 @@ void Game::CreateLights()
 {
 	// reset lights
 	lights.clear();
-	
+
 	// setup directional lights
 	Light dir1 = {};
 	dir1.Type = LIGHT_TYPE_DIRECTIONAL;
 	dir1.Direction = XMFLOAT3(-1, -1, 0);
 	dir1.Color = XMFLOAT3(1, 0, 0);
 	dir1.Intensity = 0.5f;
-	
+
 	Light dir2 = {};
 	dir2.Type = LIGHT_TYPE_DIRECTIONAL;
 	dir2.Direction = XMFLOAT3(0, -1, 0);
 	dir2.Color = XMFLOAT3(0, 1, 0);
 	dir2.Intensity = 0.2f;
-	
+
 	Light dir3 = {};
 	dir3.Type = LIGHT_TYPE_DIRECTIONAL;
 	dir3.Direction = XMFLOAT3(0, -1, -1);
 	dir3.Color = XMFLOAT3(0, 0, 1);
 	dir3.Intensity = 0.6f;
-	
+
 	lights.push_back(dir1);
 	lights.push_back(dir2);
 	lights.push_back(dir3);
-	
+
 	lightCount = 3;
 
 	// create rest of lights
@@ -536,11 +526,11 @@ void Game::CreateLights()
 		point.Color = Utils::HSLColor(-1, 0.8f, 0.4f);
 		point.Range = RandomRange(5.0f, 10.0f);
 		point.Intensity = RandomRange(0.1f, 5.0f);
-	
+
 		lights.push_back(point);
 		lightCount++;
 	}
-	
+
 	// resize to exact size
 	lights.resize(MAX_LIGHTS);
 }
@@ -613,238 +603,329 @@ void Game::Update(float deltaTime, float totalTime)
 	}
 }
 
+
 void Game::Draw(float deltaTime, float totalTime)
 {
-	// Grab the current back buffer for this frame
-	Microsoft::WRL::ComPtr<ID3D12Resource> currentBackBuffer = Graphics::BackBuffers[Graphics::SwapChainIndex()];
+	auto cmd = Graphics::CommandList.Get();
+	auto backBuffer = Graphics::BackBuffers[Graphics::SwapChainIndex()];
 
-	// Clearing the render target
+	// Begin frame
 	{
-		// Transition the back buffer from present to render target
 		D3D12_RESOURCE_BARRIER rb = {};
 		rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		rb.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		rb.Transition.pResource = currentBackBuffer.Get();
+		rb.Transition.pResource = backBuffer.Get();
 		rb.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
 		rb.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
 		rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		Graphics::CommandList->ResourceBarrier(1, &rb);
+		cmd->ResourceBarrier(1, &rb);
 
-		// Background color for clearing
-		float color[] = { 0,0,0,1 };
+		float clearColor[] = { 0,0,0,1 };
 
-		// Clear the RTV
-		Graphics::CommandList->ClearRenderTargetView(
+		cmd->ClearRenderTargetView(
 			Graphics::RTVHandles[Graphics::SwapChainIndex()],
-			color,
-			0, 0); // No scissor rectangles
+			clearColor, 0, 0);
 
-		// Clear the depth buffer, too
-		Graphics::CommandList->ClearDepthStencilView(
+		cmd->ClearDepthStencilView(
 			Graphics::DSVHandle,
 			D3D12_CLEAR_FLAG_DEPTH,
-			1.0f,	// Max depth = 1.0f
-			0,		// Not clearing stencil, but need a value
-			0, 0);	// No scissor rects
+			1.0f, 0, 0, 0);
+	}
 
-		// Transition RTs and clear, too
-		float depthClear[4] = { 1,0,0,0 };
+	// rasterize to gbuffer
+	{
+		float clearColor[] = { 0,0,0,1 };
+		float depthClear[] = { 1,0,0,0 };
+
+		// Transition + clear GBuffer
 		for (unsigned int i = 0; i < 4; i++)
 		{
+			D3D12_RESOURCE_BARRIER rb = {};
+			rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 			rb.Transition.pResource = RenderTargets[i].Texture.Get();
 			rb.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 			rb.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-			Graphics::CommandList->ResourceBarrier(1, &rb);
+			rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+			cmd->ResourceBarrier(1, &rb);
 
-			// Clear using one of two colors
-			Graphics::CommandList->ClearRenderTargetView(
+			cmd->ClearRenderTargetView(
 				RenderTargets[i].RTV,
-				i == GBUFFER_DEPTH ? depthClear : color,
+				i == GBUFFER_DEPTH ? depthClear : clearColor,
 				0, 0);
 		}
-	}
 
-	// Rendering here!
-	{
-		// Set overall pipeline state
-		Graphics::CommandList->SetPipelineState(pipelineState.Get());
+		cmd->SetPipelineState(pipelineState.Get());
+		cmd->SetDescriptorHeaps(1, Graphics::CBVSRVDescriptorHeap.GetAddressOf());
+		cmd->SetGraphicsRootSignature(rootSignature.Get());
 
-		// Set constant buffer descriptor heap
-		Graphics::CommandList->SetDescriptorHeaps(1, Graphics::CBVSRVDescriptorHeap.GetAddressOf());
+		cmd->OMSetRenderTargets(
+			4,
+			&RenderTargets[GBUFFER_ALBEDO].RTV,
+			true,
+			&Graphics::DSVHandle);
 
-		// Root sig
-		Graphics::CommandList->SetGraphicsRootSignature(rootSignature.Get());
+		cmd->RSSetViewports(1, &viewport);
+		cmd->RSSetScissorRects(1, &scissorRect);
+		cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-		// Set multiple render targets
-		Graphics::CommandList->OMSetRenderTargets(
-			4,                             // Set 4 at once
-			&RenderTargets[GBUFFER_ALBEDO].RTV,  // Address of first
-			true,                          // True means all 4 are next to each other
-			&Graphics::DSVHandle);         // Depth buffer DSV
-
-		// Set up other commands for rendering
-		Graphics::CommandList->RSSetViewports(1, &viewport);
-		Graphics::CommandList->RSSetScissorRects(1, &scissorRect);
-		Graphics::CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-		// Set up per-frame data
 		DrawDescriptorIndices drawData{};
 
-		// Per-frame vertex data
+		// ---- Per-frame data ----
 		{
 			VertexShaderPerFrameData vsFrame{};
 			vsFrame.view = camera->GetView();
 			vsFrame.projection = camera->GetProjection();
 
-			D3D12_GPU_DESCRIPTOR_HANDLE cbHandleVS = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(
-				(void*)(&vsFrame), sizeof(VertexShaderPerFrameData));
-
-			drawData.vsPerFrameCBIndex = Graphics::GetDescriptorIndex(cbHandleVS);
+			auto cb = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(&vsFrame, sizeof(vsFrame));
+			drawData.vsPerFrameCBIndex = Graphics::GetDescriptorIndex(cb);
 		}
 
-		// Per-frame pixel data
-		{
-			PixelShaderPerFrameData psFrame{};
-			psFrame.cameraPosition = camera->GetTransform()->GetPosition();
-			psFrame.lightCount = lightCount;
-			memcpy(psFrame.lights, &lights[0], sizeof(Light) * lightCount);
-
-			D3D12_GPU_DESCRIPTOR_HANDLE cbHandlePS = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(
-				(void*)(&psFrame), sizeof(PixelShaderPerFrameData));
-
-			drawData.psPerFrameCBIndex = Graphics::GetDescriptorIndex(cbHandlePS);
-		}
-
-		// Loop through the entities
+		// ---- Draw entities ----
 		for (auto& e : entities)
 		{
-			// Grab the material for this entity
-			std::shared_ptr<Material> mat = e->GetMaterial();
+			auto mat = e->GetMaterial();
+			cmd->SetPipelineState(mat->GetPipelineState().Get());
 
-			// Set the pipeline state for this material
+			drawData.vsVertexBufferIndex =
+				Graphics::GetDescriptorIndex(e->GetMesh()->GetVertexBufferDescriptorHandle());
+
+			// VS per-object
 			{
-				Graphics::CommandList->SetPipelineState(mat->GetPipelineState().Get());
+				VertexShaderPerObjectData vs{};
+				vs.world = e->GetTransform()->GetWorldMatrix();
+				vs.worldInverseTranspose = e->GetTransform()->GetWorldInverseTransposeMatrix();
+
+				auto cb = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(&vs, sizeof(vs));
+				drawData.vsPerObjectCBIndex = Graphics::GetDescriptorIndex(cb);
 			}
 
-			drawData.vsVertexBufferIndex = Graphics::GetDescriptorIndex(e->GetMesh()->GetVertexBufferDescriptorHandle());
-
-			// Set up the data we intend to use for drawing this entity
+			// PS per-object
 			{
-				VertexShaderPerObjectData vsData = {};
-				vsData.world = e->GetTransform()->GetWorldMatrix();
-				vsData.worldInverseTranspose = e->GetTransform()->GetWorldInverseTransposeMatrix();
+				PixelShaderPerObjectData ps{};
+				auto m = mat;
+				ps.albedoIndex = m->GetAlbedoIndex();
+				ps.normalMapIndex = m->GetNormalMapIndex();
+				ps.roughnessIndex = m->GetRoughnessIndex();
+				ps.metalnessIndex = m->GetMetalnessIndex();
+				ps.color = m->GetColorTint();
+				ps.metalness = m->GetMetalness();
+				ps.roughness = m->GetRoughness();
+				ps.uvScale = m->GetUVScale();
+				ps.uvOffset = m->GetUVOffset();
 
-				// Send this to a chunk of the constant buffer heap
-				// and grab the GPU handle for it so we can set it for this draw
-				D3D12_GPU_DESCRIPTOR_HANDLE cbHandleVS = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(
-					(void*)(&vsData), sizeof(VertexShaderPerObjectData));
-
-				drawData.vsPerObjectCBIndex = Graphics::GetDescriptorIndex(cbHandleVS);
+				auto cb = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(&ps, sizeof(ps));
+				drawData.psPerObjectCBIndex = Graphics::GetDescriptorIndex(cb);
 			}
 
-			// Pixel shader data and cbuffer setup
-			{
-				PixelShaderPerObjectData psData = {};
-				psData.uvScale = mat->GetUVScale();
-				psData.uvOffset = mat->GetUVOffset();
-				psData.albedoIndex = mat->GetAlbedoIndex();
-				psData.normalMapIndex = mat->GetNormalMapIndex();
-				psData.roughnessIndex = mat->GetRoughnessIndex();
-				psData.metalnessIndex = mat->GetMetalnessIndex();
-				psData.color = mat->GetColorTint();
-				psData.metalness = mat->GetMetalness();
-				psData.roughness = mat->GetRoughness();
-				psData.uvScale = mat->GetUVScale();
-				psData.uvOffset = mat->GetUVOffset();
-
-				// Send this to a chunk of the constant buffer heap
-				// and grab the GPU handle for it so we can set it for this draw
-				D3D12_GPU_DESCRIPTOR_HANDLE cbHandlePS = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(
-					(void*)(&psData), sizeof(PixelShaderPerObjectData));
-
-				drawData.psPerObjectCBIndex = Graphics::GetDescriptorIndex(cbHandlePS);
-			}
-
-			Graphics::CommandList->SetGraphicsRoot32BitConstants(
+			cmd->SetGraphicsRoot32BitConstants(
 				0,
 				sizeof(DrawDescriptorIndices) / sizeof(unsigned int),
 				&drawData,
 				0);
 
-			// Grab the mesh and its buffer views
-			std::shared_ptr<Mesh> mesh = e->GetMesh();
-			D3D12_INDEX_BUFFER_VIEW  ibv = mesh->GetIndexBufferView();
+			auto mesh = e->GetMesh();
+			auto ibv = mesh->GetIndexBufferView();
+			cmd->IASetIndexBuffer(&ibv);
 
-			// Set the geometry
-			Graphics::CommandList->IASetIndexBuffer(&ibv);
+			cmd->DrawIndexedInstanced((UINT)mesh->GetIndexCount(), 1, 0, 0, 0);
+		}
 
-			// Draw
-			Graphics::CommandList->DrawIndexedInstanced((UINT)mesh->GetIndexCount(), 1, 0, 0, 0);
+		// Skybox still belongs to raster pass
+		skyBox->Draw(camera);
+
+		// Transition GBuffer -> SRV for ray tracing usage
+		for (unsigned int i = 0; i < 4; i++)
+		{
+			D3D12_RESOURCE_BARRIER rb = {};
+			rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+			rb.Transition.pResource = RenderTargets[i].Texture.Get();
+			rb.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+			rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+			rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+			cmd->ResourceBarrier(1, &rb);
 		}
 	}
 
-	// Skybox after opaque objects
-	skyBox->Draw(camera);
+	//// ray trace - didn't end up working
+	//{
+	//	RayTracing::CreateTopLevelAccelerationStructureForScene(entities);
+	//	RayTracing::Raytrace(camera, skyBox->GetDescriptorIndex());
+	//}
 
-	// Back to back buffer
-	Graphics::CommandList->OMSetRenderTargets(1, &Graphics::RTVHandles[Graphics::SwapChainIndex()], true, &Graphics::DSVHandle);
-
-	// Transition RTs to pixel shader resources
-	for (unsigned int i = 0; i < 4; i++)
+	// lighting
 	{
+		// Transition lighting buffer (or reuse swapchain buffer temporarily) to render target
 		D3D12_RESOURCE_BARRIER rb = {};
 		rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		rb.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		rb.Transition.pResource = RenderTargets[i].Texture.Get();
+		rb.Transition.pResource = RenderTargets[LIGHT_BUFFER].Texture.Get();
+		rb.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+		rb.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+		rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		cmd->ResourceBarrier(1, &rb);
+	
+		// Clear lighting buffer
+		float clearColor[] = { 0,0,0,1 };
+		cmd->ClearRenderTargetView(RenderTargets[LIGHT_BUFFER].RTV, clearColor, 0, 0);
+	
+		// Set render target to lighting buffer
+		cmd->OMSetRenderTargets(
+			1,
+			&RenderTargets[LIGHT_BUFFER].RTV,
+			true,
+			&Graphics::DSVHandle);
+	
+		cmd->SetPipelineState(lightingPSO.Get());
+		cmd->SetGraphicsRootSignature(rootSignature.Get());
+	
+		// Bind GBuffer SRVs
+		cmd->SetDescriptorHeaps(1, Graphics::CBVSRVDescriptorHeap.GetAddressOf());
+	
+		LightingIndices data{};
+		data.GBufferAlbedoIndex = RenderTargets[GBUFFER_ALBEDO].SRV.GPUDescriptorIndex;
+		data.GBufferDepthIndex = RenderTargets[GBUFFER_DEPTH].SRV.GPUDescriptorIndex;
+		data.GBufferMaterialIndex = RenderTargets[GBUFFER_MATERIAL].SRV.GPUDescriptorIndex;
+		data.GBufferNormalIndex = RenderTargets[GBUFFER_NORMALS].SRV.GPUDescriptorIndex;
+	
+		PixelShaderPerFrameData psFrame{};
+		psFrame.inverseViewProjection = camera->GetInverseViewProjection();
+		psFrame.cameraPosition = camera->GetTransform()->GetPosition();
+		psFrame.lightCount = lightCount;
+		memcpy(psFrame.lights, &lights[0], sizeof(Light)* lightCount);
+	
+		auto cb = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(&psFrame, sizeof(psFrame));
+		data.psPerFrameCBIndex = Graphics::GetDescriptorIndex(cb);
+	
+	
+		cmd->SetGraphicsRoot32BitConstants(
+			0,
+			sizeof(LightingIndices) / 4,
+			&data,
+			0);
+	
+		// Draw fullscreen triangle to compute lighting
+		cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		cmd->DrawInstanced(3, 1, 0, 0);
+	
+		// Transition lighting buffer to SRV for composite pass
+		rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		rb.Transition.pResource = RenderTargets[LIGHT_BUFFER].Texture.Get();
 		rb.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
 		rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 		rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		Graphics::CommandList->ResourceBarrier(1, &rb);
+		cmd->ResourceBarrier(1, &rb);
 	}
 
-	// Put the pixels on the screen
+	// SDF pass
+	// {
+	// 	// Transition SDF texture to render target
+	// 	D3D12_RESOURCE_BARRIER rb = {};
+	// 	rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	// 	rb.Transition.pResource = RenderTargets[SDF].Texture.Get(); 
+	// 	rb.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	// 	rb.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+	// 	rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	// 	cmd->ResourceBarrier(1, &rb);
+	// 
+	// 	// Clear SDF texture
+	// 	float clearColor[4] = { 0, 0, 0, 0 }; 
+	// 	cmd->ClearRenderTargetView(RenderTargets[SDF].RTV, clearColor, 0, 0);
+	// 
+	// 	// Set pipeline state to SDF PSO
+	// 	cmd->SetPipelineState(sdfPSO.Get());
+	// 	cmd->SetGraphicsRootSignature(rootSignature.Get());
+	// 
+	// 	// Set descriptor heaps
+	// 	cmd->SetDescriptorHeaps(1, Graphics::CBVSRVDescriptorHeap.GetAddressOf());
+	// 
+	// 	// Create and fill the SDF data structure
+	// 	SDFPassData sdfData{};
+	// 	sdfData.inverseViewProjection = camera->GetInverseViewProjection();
+	// 	sdfData.cameraPosition = camera->GetTransform()->GetPosition();
+	// 	sdfData.screenWidth = Window::Width();
+	// 	sdfData.screenHeight = Window::Height();
+	// 	sdfData.totalTime = totalTime;
+	// 	
+	// 	// Create a constant buffer and fill it with SDF data
+	// 	auto cb = Graphics::FillNextConstantBufferAndGetGPUDescriptorHandle(&sdfData, sizeof(sdfData));
+	// 
+	// 	cmd->SetGraphicsRoot32BitConstants(
+	// 		0, 1,
+	// 		&sdfData, 0);
+	// 
+	// 	// set rt to sdf
+	// 	cmd->OMSetRenderTargets(1, &RenderTargets[SDF].RTV, true, &Graphics::DSVHandle);
+	// 
+	// 	// fullscreen quad
+	// 	cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	// 	cmd->DrawInstanced(3, 1, 0, 0);
+	// 
+	// 	// Transition SDF texture to SRV for later passes
+	// 	rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	// 	rb.Transition.pResource = RenderTargets[SDF].Texture.Get();
+	// 	rb.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+	// 	rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	// 	rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	// 	cmd->ResourceBarrier(1, &rb);
+	// }
+
+	// composite pass
 	{
-		Graphics::CommandList->SetPipelineState(fullScreenTexturePSO.Get());
-		Graphics::CommandList->SetGraphicsRootSignature(rootSignature.Get());
+		// After lighting pass
+		cmd->SetGraphicsRootSignature(rootSignature.Get());
+		cmd->SetPipelineState(fullScreenTexturePSO.Get());
 
-		// Set index of 1 texture
-		Graphics::CommandList->SetGraphicsRoot32BitConstants(0, 1, &RenderTargets[GBUFFER_ALBEDO].SRV.GPUDescriptorIndex, 0);
+		cmd->OMSetRenderTargets(
+			1,
+			&Graphics::RTVHandles[Graphics::SwapChainIndex()],
+			true,
+			&Graphics::DSVHandle);
 
-		Graphics::CommandList->DrawInstanced(3, 1, 0, 0);
+		CompositeIndices data{};
+		data.GBufferAlbedoIndex = RenderTargets[GBUFFER_ALBEDO].SRV.GPUDescriptorIndex;
+		data.GBufferDepthIndex = RenderTargets[GBUFFER_DEPTH].SRV.GPUDescriptorIndex;
+		data.GBufferMaterialIndex = RenderTargets[GBUFFER_MATERIAL].SRV.GPUDescriptorIndex;
+		data.GBufferNormalIndex = RenderTargets[GBUFFER_NORMALS].SRV.GPUDescriptorIndex;
+		data.LightingIndex = RenderTargets[LIGHT_BUFFER].SRV.GPUDescriptorIndex;
+		data.SDFIndex = RenderTargets[SDF].SRV.GPUDescriptorIndex;
+
+		cmd->SetGraphicsRoot32BitConstants(
+			0,
+			sizeof(CompositeIndices) / 4,
+			&data,
+			0);
+
+		cmd->DrawInstanced(3, 1, 0, 0);
 	}
 
-	// ImGui Render after all other scene objects
+	// UI
 	{
 		ImGui::Render();
-		ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), Graphics::CommandList.Get());
+		ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmd);
 	}
 
 	// Present
 	{
-		// Transition back to present
 		D3D12_RESOURCE_BARRIER rb = {};
 		rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 		rb.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		rb.Transition.pResource = currentBackBuffer.Get();
+		rb.Transition.pResource = backBuffer.Get();
 		rb.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
 		rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
 		rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		Graphics::CommandList->ResourceBarrier(1, &rb);
+		cmd->ResourceBarrier(1, &rb);
 
-		// Must occur BEFORE present
 		Graphics::CloseAndExecuteCommandList();
 
-		// Present the current back buffer and move to the next one
 		bool vsync = Graphics::VsyncState();
 		Graphics::SwapChain->Present(
 			vsync ? 1 : 0,
 			vsync ? 0 : DXGI_PRESENT_ALLOW_TEARING);
 
-		// Reset the command list & allocator for the upcoming frame
 		Graphics::AdvanceSwapChainIndex();
+		Graphics::WaitForGPU();
 		Graphics::ResetAllocatorAndCommandList(Graphics::SwapChainIndex());
 	}
 }
+
 
 // --------------------------------------------------------
 // Prepares a new frame for the UI, feeding it fresh
@@ -867,7 +948,6 @@ void Game::UINewFrame(float deltaTime)
 	Input::SetKeyboardCapture(io.WantCaptureKeyboard);
 	Input::SetMouseCapture(io.WantCaptureMouse);
 }
-
 
 // --------------------------------------------------------
 // Builds the UI for the current frame
@@ -911,11 +991,13 @@ void Game::BuildUI()
 				width,
 				width / Window::AspectRatio());
 
-			for (unsigned int i = 0; i < 4; i++)
+			for (unsigned int i = 0; i < 6; i++)
 			{
 				// Convert descriptor index BACK into actual GPU handle
 				ImageWithHover(RenderTargets[i].SRV.GPUHandle, size);
 			}
+
+			ImageWithHover(RayTracing::RaytracingOutputUAV_GPU, size);
 
 			// Finalize the tree node
 			ImGui::TreePop();
@@ -978,7 +1060,7 @@ void Game::RayTrace(float deltaTime, float totalTime)
 	// Raytracing - create TLAS then trace it
 	{
 		RayTracing::CreateTopLevelAccelerationStructureForScene(entities);
-		RayTracing::Raytrace(camera, currentBackBuffer, skyBox->GetDescriptorIndex());
+		RayTracing::Raytrace(camera, skyBox->GetDescriptorIndex());
 	}
 
 	// Present

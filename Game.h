@@ -19,8 +19,9 @@ enum RenderTargetType
 	GBUFFER_NORMALS,
 	GBUFFER_MATERIAL,
 	GBUFFER_DEPTH,
-	SCENE,
 	LIGHT_BUFFER,
+	SDF,
+	SCENE,
 
 	// Count is always the last one!
 	RENDER_TARGET_TYPE_COUNT
@@ -80,6 +81,8 @@ private:
 
 	// Going to assume the same root signature is compatible with this PSO
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> fullScreenTexturePSO;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> lightingPSO;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> sdfPSO;
 public:
 	// utils
 	std::wstring AssetPath = L"../../Assets/";
